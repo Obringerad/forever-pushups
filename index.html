@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forever Pushups</title>
+<style>
+  :root {
+    --bg: #14110d; --panel: #1f1a14; --panel2: #2a231a; --line: #3d3324;
+    --gold: #f0c050; --gold-dim: #a8842f; --text: #eee3cc; --muted: #9c8f78;
+    --red: #d9534f; --green: #5cb85c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 22px; color: var(--gold); letter-spacing: 1px; font-family: Georgia, serif; }
+  h2 { margin: 0 0 12px; font-size: 15px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--gold-dim); }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+  .tab { background: var(--panel2); border: 1px solid var(--line); color: var(--muted); padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  .tab.active { color: var(--bg); background: var(--gold); border-color: var(--gold); font-weight: 600; }
+  button { font: inherit; cursor: pointer; }
+  .btn { background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 7px 12px; border-radius: 6px; font-size: 13px; }
+  .btn:hover { border-color: var(--gold-dim); }
+  .btn.primary { background: var(--gold); color: var(--bg); border-color: var(--gold); font-weight: 600; }
+  .btn.danger { color: var(--red); }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px; display: grid; gap: 20px; grid-template-columns: 1fr 1fr; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  .full { grid-column: 1 / -1; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .stat { background: var(--panel2); border-radius: 8px; padding: 12px 14px; }
+  .stat .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  .stat .val { font-size: 30px; font-weight: 700; color: var(--gold); line-height: 1.2; }
+  .stat .sub { font-size: 12px; color: var(--muted); }
+  .stat.owed .val { color: var(--red); }
+
+  .note-row { display: flex; gap: 8px; margin-bottom: 14px; }
+  input, select { background: var(--bg); border: 1px solid var(--line); color: var(--text); padding: 8px 10px; border-radius: 6px; font: inherit; font-size: 14px; }
+  input:focus, select:focus { outline: none; border-color: var(--gold-dim); }
+  .note-row input { flex: 1; }
+
+  .events { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .event { position: relative; background: linear-gradient(180deg, #3a2e1d, #241d13); border: 1px solid var(--gold-dim); color: var(--text); border-radius: 10px; padding: 16px 10px; text-align: center; transition: transform .08s, box-shadow .15s; }
+  .event:hover { box-shadow: 0 0 14px rgba(240,192,80,.25); }
+  .event:active { transform: scale(.96); }
+  .event .name { font-weight: 600; font-size: 15px; }
+  .event .reps { font-size: 22px; color: var(--gold); font-weight: 700; margin-top: 4px; }
+  .event .ex { font-size: 12px; color: var(--muted); }
+  .event .key { position: absolute; top: 6px; left: 8px; font-size: 11px; color: var(--muted); }
+
+  .list { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; }
+  .list li { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .list li:last-child { border-bottom: none; }
+  .list .what { flex: 1; min-width: 0; }
+  .list .what .n { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list .amt { font-weight: 700; color: var(--gold); white-space: nowrap; }
+  .icon-btn { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; width: 30px; height: 30px; }
+  .icon-btn.ok:hover { color: var(--green); border-color: var(--green); }
+  .icon-btn.x:hover { color: var(--red); border-color: var(--red); }
+  .row-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
+  .row-head h2 { margin: 0; }
+  .empty { color: var(--muted); font-style: italic; padding: 12px 4px; }
+
+  .board { list-style: none; padding: 0; margin: 0; }
+  .board li { display: flex; justify-content: space-between; padding: 8px 4px; border-bottom: 1px solid var(--line); }
+  .board .rank { color: var(--gold-dim); width: 28px; display: inline-block; }
+
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--gold-dim); border-radius: 12px; padding: 20px; width: min(640px, 94vw); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  .cfg-row { display: grid; grid-template-columns: 1fr 70px 130px 34px; gap: 8px; margin-bottom: 8px; }
+  .cfg-head { font-size: 12px; color: var(--muted); }
+  .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--gold); color: var(--bg); font-weight: 600; padding: 10px 18px; border-radius: 8px; transition: transform .2s; display: flex; gap: 12px; align-items: center; }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast button { background: var(--bg); color: var(--gold); border: none; border-radius: 5px; padding: 4px 10px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚔ Forever Pushups</h1>
+  <div class="tabs" id="tabs"></div>
+  <button class="btn" id="addProfile">+ Player</button>
+  <button class="btn" id="settingsBtn">⚙ Settings</button>
+</header>
+
+<main>
+  <section class="panel full">
+    <div class="stats" id="stats"></div>
+  </section>
+
+  <section class="panel full">
+    <div class="row-head"><h2>Something happened in WoW…</h2><button class="btn" id="editEvents">Edit buttons</button></div>
+    <div class="note-row">
+      <input id="note" placeholder="Note for the next click (optional) – e.g. Duskwood, Hogger, Warsong Gulch…">
+    </div>
+    <div class="events" id="events"></div>
+  </section>
+
+  <section class="panel">
+    <div class="row-head"><h2>Owed (queue)</h2><span><button class="btn primary" id="doAll">All as pushups</button> <button class="btn primary" id="doAllSquats">All as squats</button></span></div>
+    <ul class="list" id="queue"></ul>
+  </section>
+
+  <section class="panel">
+    <div class="row-head"><h2>Completed</h2></div>
+    <ul class="list" id="history"></ul>
+  </section>
+
+  <section class="panel full">
+    <h2>Leaderboard (reps completed)</h2>
+    <ul class="board" id="board"></ul>
+  </section>
+</main>
+
+<dialog id="eventsDialog">
+  <h2>Buttons for <span id="cfgName"></span></h2>
+  <div class="cfg-row cfg-head"><span>Event</span><span>Pushups</span><span>Squats (×2)</span><span></span></div>
+  <div id="cfgRows"></div>
+  <button class="btn" id="cfgAdd">+ Add button</button>
+  <div class="dialog-actions">
+    <button class="btn" id="cfgCancel">Cancel</button>
+    <button class="btn primary" id="cfgSave">Save</button>
+  </div>
+</dialog>
+
+<dialog id="settingsDialog">
+  <h2>Settings</h2>
+  <p style="color:var(--muted);font-size:14px">Everything is saved in this browser. Use export/import to back up or move data to another computer.</p>
+  <div class="dialog-actions" style="justify-content:flex-start">
+    <button class="btn" id="renameProfile">Rename current player</button>
+    <button class="btn danger" id="deleteProfile">Delete current player</button>
+  </div>
+  <div class="dialog-actions" style="justify-content:flex-start">
+    <button class="btn" id="exportBtn">Export data (.json)</button>
+    <button class="btn" id="importBtn">Import data</button>
+    <input type="file" id="importFile" accept=".json" hidden>
+  </div>
+  <div class="dialog-actions"><button class="btn primary" id="settingsClose">Close</button></div>
+</dialog>
+
+<div class="toast" id="toast"><span id="toastMsg"></span><button id="toastUndo">Undo</button></div>
+
+<script>
+const STORE_KEY = 'foreverPushups.v2';
+const SQUAT_MULT = 2; // squats count double: owe 5 pushups -> or do 10 squats
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+function defaultEvents(flightReps = 5) {
+  return [
+    { id: uid(), name: 'PvE Death', reps: 10 },
+    { id: uid(), name: 'PvP Death', reps: 5 },
+    { id: uid(), name: 'Falling Death', reps: 30 },
+    { id: uid(), name: 'Flight Point', reps: flightReps },
+  ];
+}
+
+// An entry owes `reps` pushups. When completed it's done as Pushups (reps) or Squats (reps * 2).
+const doneReps = e => e.exercise === 'Squats' ? e.reps * SQUAT_MULT : e.reps;
+
+// First run: seed from the "Forever Pushups" spreadsheet (blue cells = done as squats).
+function seedState() {
+  const mk = (events, name, notes, doneAs) => {
+    const ev = events.find(e => e.name === name);
+    return notes.map(note => {
+      const sq = note.startsWith('~');
+      return { id: uid(), eventName: ev.name, reps: ev.reps, note: sq ? note.slice(1) : note, ts: Date.now(),
+        done: !!doneAs, doneTs: doneAs ? Date.now() : null, exercise: doneAs ? (sq ? 'Squats' : 'Pushups') : null };
+    });
+  };
+  const aEv = defaultEvents(5), jEv = defaultEvents(10);
+  const alex = { id: uid(), name: 'Alex', events: aEv, log: [
+    ...mk(aEv, 'PvE Death', ['HoT', 'Loch Modan', 'Thousand Needles', 'Thousand Needles', 'Redridge', 'Redridge', 'Duskwood', 'Duskwood', '~Excavation: Wetlands', '~Dragonmaw Infiltrator'], true),
+    ...mk(aEv, 'PvP Death', ['Warsong Gulch', 'Warsong Gulch', 'Francois Trustram', '~Angy Skye', '~Onedead Rk'], true),
+    ...mk(aEv, 'Flight Point', ['Darkshore', 'Rut\'theran', 'Darkshore', 'Westfall', 'Westfall', 'Stormwind', 'Westfall', 'Stormwind', 'Stormwind', 'Loch Modan', 'Southshore', 'Darkshire', 'Darkshire', 'Stormwind', 'Duskwood', 'Redridge', '~Stormwind', '~Wetlands', '~Arathi Highlands', '~Wetlands', '~Ironforge'], true),
+  ]};
+  const jeff = { id: uid(), name: 'Jeff', events: jEv, log: [
+    ...mk(jEv, 'PvE Death', ['Imp', 'Imp', 'Furbolg cave', 'Hall of Thanes', 'Hall of Thanes', 'Thousand Needles'], false),
+    ...mk(jEv, 'Falling Death', ['Sleeping Bag'], false),
+    ...mk(jEv, 'Flight Point', ['', '', ''], false),
+  ]};
+  return { profiles: [alex, jeff], activeId: alex.id };
+}
+
+let state;
+try { state = JSON.parse(localStorage.getItem(STORE_KEY)); } catch {}
+if (!state || !state.profiles?.length) state = seedState();
+const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (err) { console.warn('Could not save', err); } };
+const active = () => state.profiles.find(p => p.id === state.activeId) || state.profiles[0];
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const owedTotal = entries => entries.reduce((a, e) => a + e.reps, 0);              // in pushups
+const doneOf = (entries, ex) => entries.filter(e => e.exercise === ex).reduce((a, e) => a + doneReps(e), 0);
+const score = entries => entries.reduce((a, e) => a + e.reps, 0);                  // pushup-equivalent
+const total = owedTotal;
+const fmtTime = ts => new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+function render() {
+  const p = active();
+  state.activeId = p.id;
+
+  $('tabs').innerHTML = state.profiles.map(pr =>
+    `<button class="tab ${pr.id === p.id ? 'active' : ''}" data-id="${pr.id}">${esc(pr.name)}</button>`).join('');
+
+  const queue = p.log.filter(e => !e.done);
+  const done = p.log.filter(e => e.done);
+  const owed = owedTotal(queue);
+  $('stats').innerHTML = `
+    <div class="stat owed"><div class="label">Owed now</div><div class="val">${owed}</div><div class="sub">${owed ? `pushups, or ${owed * SQUAT_MULT} squats` : 'all caught up'}</div></div>
+    <div class="stat"><div class="label">Pushups done</div><div class="val">${doneOf(done, 'Pushups')}</div></div>
+    <div class="stat"><div class="label">Squats done</div><div class="val">${doneOf(done, 'Squats')}</div><div class="sub">count double</div></div>
+    <div class="stat"><div class="label">Score</div><div class="val">${score(done)}</div><div class="sub">pushups + squats ÷ ${SQUAT_MULT}</div></div>
+    <div class="stat"><div class="label">Events logged</div><div class="val">${p.log.length}</div></div>`;
+
+  $('events').innerHTML = p.events.map((ev, i) => `
+    <button class="event" data-id="${ev.id}" title="Shortcut: ${i < 9 ? i + 1 : ''}">
+      ${i < 9 ? `<span class="key">${i + 1}</span>` : ''}
+      <div class="name">${esc(ev.name)}</div>
+      <div class="reps">+${ev.reps}</div>
+      <div class="ex">pushups · or ${ev.reps * SQUAT_MULT} squats</div>
+    </button>`).join('') || '<div class="empty">No buttons yet — click "Edit buttons".</div>';
+
+  const item = (e, isQueue) => `
+    <li>
+      <div class="what">${esc(e.eventName)}<div class="n">${esc(e.note) || '&nbsp;'} · ${fmtTime(isQueue ? e.ts : e.doneTs)}</div></div>
+      ${isQueue
+        ? `<button class="btn" data-act="done" data-ex="Pushups" data-id="${e.id}" title="Did them as pushups">✓ ${e.reps} pushups</button>
+           <button class="btn" data-act="done" data-ex="Squats" data-id="${e.id}" title="Did them as squats">✓ ${e.reps * SQUAT_MULT} squats</button>
+           <button class="icon-btn x" data-act="del" data-id="${e.id}" title="Delete">✕</button>`
+        : `<span class="amt">${doneReps(e)} ${esc(e.exercise.toLowerCase())}</span>
+           <button class="icon-btn" data-act="undo" data-id="${e.id}" title="Move back to queue">↺</button>`}
+    </li>`;
+  $('queue').innerHTML = queue.slice().reverse().map(e => item(e, true)).join('') || '<li class="empty">Nothing owed. Go die to something.</li>';
+  $('history').innerHTML = done.slice().sort((a, b) => b.doneTs - a.doneTs).map(e => item(e, false)).join('') || '<li class="empty">No reps completed yet.</li>';
+  $('doAll').disabled = $('doAllSquats').disabled = !queue.length;
+
+  const ranked = state.profiles.map(pr => {
+    const d = pr.log.filter(e => e.done);
+    return { name: pr.name, score: score(d), pu: doneOf(d, 'Pushups'), sq: doneOf(d, 'Squats'), owed: owedTotal(pr.log.filter(e => !e.done)) };
+  }).sort((a, b) => b.score - a.score);
+  $('board').innerHTML = ranked.map((r, i) => `<li><span><span class="rank">#${i + 1}</span>${esc(r.name)}</span><span><b style="color:var(--gold)">${r.score}</b> <span style="color:var(--muted)">· ${r.pu} pushups · ${r.sq} squats · ${r.owed} owed</span></span></li>`).join('');
+
+  save();
+}
+
+// ---- toast with undo ----
+let undoFn = null, toastTimer = null;
+function toast(msg, undo) {
+  $('toastMsg').textContent = msg;
+  undoFn = undo;
+  $('toastUndo').style.display = undo ? '' : 'none';
+  $('toast').classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $('toast').classList.remove('show'), 4000);
+}
+$('toastUndo').onclick = () => { if (undoFn) { undoFn(); undoFn = null; render(); } $('toast').classList.remove('show'); };
+
+// ---- logging ----
+function logEvent(evId) {
+  const p = active();
+  const ev = p.events.find(e => e.id === evId);
+  if (!ev) return;
+  const entry = { id: uid(), eventName: ev.name, exercise: null, reps: ev.reps, note: $('note').value.trim(), ts: Date.now(), done: false, doneTs: null };
+  p.log.push(entry);
+  $('note').value = '';
+  render();
+  toast(`+${ev.reps} pushups / ${ev.reps * SQUAT_MULT} squats (${ev.name})`, () => { p.log = p.log.filter(e => e.id !== entry.id); });
+}
+
+$('events').onclick = e => { const b = e.target.closest('.event'); if (b) logEvent(b.dataset.id); };
+
+document.addEventListener('keydown', e => {
+  if (e.target.matches('input, select, textarea') || document.querySelector('dialog[open]')) return;
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= 9 && active().events[n - 1]) logEvent(active().events[n - 1].id);
+});
+
+function onListClick(e) {
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  const p = active();
+  const entry = p.log.find(x => x.id === b.dataset.id);
+  if (!entry) return;
+  if (b.dataset.act === 'done') {
+    entry.done = true; entry.doneTs = Date.now(); entry.exercise = b.dataset.ex;
+    toast(`${doneReps(entry)} ${entry.exercise.toLowerCase()} done 💪`, () => { entry.done = false; entry.doneTs = null; entry.exercise = null; });
+  }
+  if (b.dataset.act === 'undo') { entry.done = false; entry.doneTs = null; entry.exercise = null; }
+  if (b.dataset.act === 'del') {
+    const idx = p.log.indexOf(entry);
+    p.log.splice(idx, 1);
+    toast('Entry deleted', () => p.log.splice(idx, 0, entry));
+  }
+  render();
+}
+$('queue').onclick = onListClick;
+$('history').onclick = onListClick;
+
+function completeAll(ex) {
+  const pending = active().log.filter(e => !e.done);
+  const now = Date.now();
+  pending.forEach(e => { e.done = true; e.doneTs = now; e.exercise = ex; });
+  const reps = pending.reduce((a, e) => a + doneReps(e), 0);
+  toast(`${reps} ${ex.toLowerCase()} completed 💪`, () => pending.forEach(e => { e.done = false; e.doneTs = null; e.exercise = null; }));
+  render();
+}
+$('doAll').onclick = () => completeAll('Pushups');
+$('doAllSquats').onclick = () => completeAll('Squats');
+
+// ---- profiles ----
+$('tabs').onclick = e => { const t = e.target.closest('.tab'); if (t) { state.activeId = t.dataset.id; render(); } };
+$('addProfile').onclick = () => {
+  const name = prompt('Player name?');
+  if (!name?.trim()) return;
+  const p = { id: uid(), name: name.trim(), events: defaultEvents(), log: [] };
+  state.profiles.push(p);
+  state.activeId = p.id;
+  render();
+};
+$('renameProfile').onclick = () => {
+  const p = active();
+  const name = prompt('New name?', p.name);
+  if (name?.trim()) { p.name = name.trim(); render(); }
+};
+$('deleteProfile').onclick = () => {
+  const p = active();
+  if (state.profiles.length === 1) return alert('You need at least one player.');
+  if (!confirm(`Delete ${p.name} and all their history? This can't be undone.`)) return;
+  state.profiles = state.profiles.filter(x => x.id !== p.id);
+  state.activeId = state.profiles[0].id;
+  $('settingsDialog').close();
+  render();
+};
+
+// ---- edit buttons dialog ----
+function cfgRow(ev = { id: uid(), name: '', reps: 10 }) {
+  return `<div class="cfg-row" data-id="${ev.id}">
+    <input class="c-name" value="${esc(ev.name)}" placeholder="e.g. Ganked">
+    <input class="c-reps" type="number" min="1" value="${ev.reps}">
+    <span class="c-sq" style="align-self:center;color:var(--muted)">${ev.reps * SQUAT_MULT} squats</span>
+    <button class="icon-btn x c-del" title="Remove">✕</button>
+  </div>`;
+}
+$('cfgRows').oninput = e => {
+  if (e.target.matches('.c-reps')) e.target.closest('.cfg-row').querySelector('.c-sq').textContent = `${(parseInt(e.target.value, 10) || 0) * SQUAT_MULT} squats`;
+};
+$('editEvents').onclick = () => {
+  const p = active();
+  $('cfgName').textContent = p.name;
+  $('cfgRows').innerHTML = p.events.map(cfgRow).join('');
+  $('eventsDialog').showModal();
+};
+$('cfgAdd').onclick = () => $('cfgRows').insertAdjacentHTML('beforeend', cfgRow());
+$('cfgRows').onclick = e => { if (e.target.closest('.c-del')) e.target.closest('.cfg-row').remove(); };
+$('cfgCancel').onclick = () => $('eventsDialog').close();
+$('cfgSave').onclick = () => {
+  const rows = [...$('cfgRows').querySelectorAll('.cfg-row')];
+  active().events = rows.map(r => ({
+    id: r.dataset.id,
+    name: r.querySelector('.c-name').value.trim() || 'Event',
+    reps: Math.max(1, parseInt(r.querySelector('.c-reps').value, 10) || 1),
+  }));
+  $('eventsDialog').close();
+  render();
+};
+
+// ---- settings / export / import ----
+$('settingsBtn').onclick = () => $('settingsDialog').showModal();
+$('settingsClose').onclick = () => $('settingsDialog').close();
+$('exportBtn').onclick = () => {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `forever-pushups-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+$('importBtn').onclick = () => $('importFile').click();
+$('importFile').onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data.profiles)) throw new Error('bad file');
+    if (!confirm('Replace all current data with this file?')) return;
+    state = data;
+    $('settingsDialog').close();
+    render();
+  } catch { alert('That file doesn\'t look like a Forever Pushups export.'); }
+  e.target.value = '';
+};
+
+render();
+</script>
+</body>
+</html>
