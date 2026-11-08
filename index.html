@@ -61,6 +61,13 @@
   .row-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
   .row-head h2 { margin: 0; }
   .empty { color: var(--muted); font-style: italic; padding: 12px 4px; }
+  #queue li { flex-wrap: wrap; gap: 6px; }
+  #queue li .what { flex: 1 1 100%; }
+  #queue li .btn { padding: 5px 9px; font-size: 12px; }
+  #queue li .icon-btn { margin-left: auto; }
+  .row-head { flex-wrap: wrap; }
+  #doAllBtns { display: flex; gap: 6px; flex-wrap: wrap; }
+  #doAllBtns .btn { padding: 5px 9px; font-size: 12px; }
 
   .board { list-style: none; padding: 0; margin: 0; }
   .board li { display: flex; justify-content: space-between; padding: 8px 4px; border-bottom: 1px solid var(--line); }
@@ -68,7 +75,7 @@
 
   dialog { background: var(--panel); color: var(--text); border: 1px solid var(--gold-dim); border-radius: 12px; padding: 20px; width: min(640px, 94vw); }
   dialog::backdrop { background: rgba(0,0,0,.6); }
-  .cfg-row { display: grid; grid-template-columns: 1fr 70px 130px 34px; gap: 8px; margin-bottom: 8px; }
+  .cfg-row { display: grid; grid-template-columns: 1fr 70px 170px 34px; gap: 8px; margin-bottom: 8px; }
   .cfg-head { font-size: 12px; color: var(--muted); }
   .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
 
@@ -100,7 +107,7 @@
   </section>
 
   <section class="panel">
-    <div class="row-head"><h2>Owed (queue)</h2><span><button class="btn primary" id="doAll">All as pushups</button> <button class="btn primary" id="doAllSquats">All as squats</button></span></div>
+    <div class="row-head"><h2>Owed (queue)</h2><span id="doAllBtns"></span></div>
     <ul class="list" id="queue"></ul>
   </section>
 
@@ -117,7 +124,7 @@
 
 <dialog id="eventsDialog">
   <h2>Buttons for <span id="cfgName"></span></h2>
-  <div class="cfg-row cfg-head"><span>Event</span><span>Pushups</span><span>Squats (×2)</span><span></span></div>
+  <div class="cfg-row cfg-head"><span>Event</span><span>Pushups</span><span>Squats / Situps (×2)</span><span></span></div>
   <div id="cfgRows"></div>
   <button class="btn" id="cfgAdd">+ Add button</button>
   <div class="dialog-actions">
@@ -145,7 +152,15 @@
 
 <script>
 const STORE_KEY = 'foreverPushups.v2';
-const SQUAT_MULT = 2; // squats count double: owe 5 pushups -> or do 10 squats
+// Every event owes pushups. You can pay it off with any of these; mult = reps per pushup owed.
+const EXERCISES = [
+  { name: 'Pushups', mult: 1 },
+  { name: 'Squats', mult: 2 },
+  { name: 'Situps', mult: 2 },
+];
+const MULT = Object.fromEntries(EXERCISES.map(x => [x.name, x.mult]));
+const ALTS = EXERCISES.filter(x => x.name !== 'Pushups');
+const altText = reps => ALTS.map(x => `${reps * x.mult} ${x.name.toLowerCase()}`).join(' or ');
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 function defaultEvents(flightReps = 5) {
@@ -157,8 +172,8 @@ function defaultEvents(flightReps = 5) {
   ];
 }
 
-// An entry owes `reps` pushups. When completed it's done as Pushups (reps) or Squats (reps * 2).
-const doneReps = e => e.exercise === 'Squats' ? e.reps * SQUAT_MULT : e.reps;
+// An entry owes `reps` pushups. When completed it's done as one exercise at reps * that exercise's mult.
+const doneReps = e => e.reps * (MULT[e.exercise] || 1);
 
 // First run: seed from the "Forever Pushups" spreadsheet (blue cells = done as squats).
 function seedState() {
@@ -209,10 +224,9 @@ function render() {
   const done = p.log.filter(e => e.done);
   const owed = owedTotal(queue);
   $('stats').innerHTML = `
-    <div class="stat owed"><div class="label">Owed now</div><div class="val">${owed}</div><div class="sub">${owed ? `pushups, or ${owed * SQUAT_MULT} squats` : 'all caught up'}</div></div>
-    <div class="stat"><div class="label">Pushups done</div><div class="val">${doneOf(done, 'Pushups')}</div></div>
-    <div class="stat"><div class="label">Squats done</div><div class="val">${doneOf(done, 'Squats')}</div><div class="sub">count double</div></div>
-    <div class="stat"><div class="label">Score</div><div class="val">${score(done)}</div><div class="sub">pushups + squats ÷ ${SQUAT_MULT}</div></div>
+    <div class="stat owed"><div class="label">Owed now</div><div class="val">${owed}</div><div class="sub">${owed ? `pushups, or ${altText(owed)}` : 'all caught up'}</div></div>
+    ${EXERCISES.map(x => `<div class="stat"><div class="label">${x.name} done</div><div class="val">${doneOf(done, x.name)}</div>${x.mult !== 1 ? `<div class="sub">count ×${x.mult}</div>` : ''}</div>`).join('')}
+    <div class="stat"><div class="label">Score</div><div class="val">${score(done)}</div><div class="sub">in pushups (squats & situps ÷ 2)</div></div>
     <div class="stat"><div class="label">Events logged</div><div class="val">${p.log.length}</div></div>`;
 
   $('events').innerHTML = p.events.map((ev, i) => `
@@ -220,28 +234,27 @@ function render() {
       ${i < 9 ? `<span class="key">${i + 1}</span>` : ''}
       <div class="name">${esc(ev.name)}</div>
       <div class="reps">+${ev.reps}</div>
-      <div class="ex">pushups · or ${ev.reps * SQUAT_MULT} squats</div>
+      <div class="ex">pushups · or ${altText(ev.reps)}</div>
     </button>`).join('') || '<div class="empty">No buttons yet — click "Edit buttons".</div>';
 
   const item = (e, isQueue) => `
     <li>
       <div class="what">${esc(e.eventName)}<div class="n">${esc(e.note) || '&nbsp;'} · ${fmtTime(isQueue ? e.ts : e.doneTs)}</div></div>
       ${isQueue
-        ? `<button class="btn" data-act="done" data-ex="Pushups" data-id="${e.id}" title="Did them as pushups">✓ ${e.reps} pushups</button>
-           <button class="btn" data-act="done" data-ex="Squats" data-id="${e.id}" title="Did them as squats">✓ ${e.reps * SQUAT_MULT} squats</button>
+        ? `${EXERCISES.map(x => `<button class="btn" data-act="done" data-ex="${x.name}" data-id="${e.id}" title="Did them as ${x.name.toLowerCase()}">✓ ${e.reps * x.mult} ${x.name.toLowerCase()}</button>`).join('')}
            <button class="icon-btn x" data-act="del" data-id="${e.id}" title="Delete">✕</button>`
         : `<span class="amt">${doneReps(e)} ${esc(e.exercise.toLowerCase())}</span>
            <button class="icon-btn" data-act="undo" data-id="${e.id}" title="Move back to queue">↺</button>`}
     </li>`;
   $('queue').innerHTML = queue.slice().reverse().map(e => item(e, true)).join('') || '<li class="empty">Nothing owed. Go die to something.</li>';
   $('history').innerHTML = done.slice().sort((a, b) => b.doneTs - a.doneTs).map(e => item(e, false)).join('') || '<li class="empty">No reps completed yet.</li>';
-  $('doAll').disabled = $('doAllSquats').disabled = !queue.length;
+  $('doAllBtns').innerHTML = queue.length ? EXERCISES.map(x => `<button class="btn primary" data-all="${x.name}">All as ${x.name.toLowerCase()}</button>`).join(' ') : '';
 
   const ranked = state.profiles.map(pr => {
     const d = pr.log.filter(e => e.done);
-    return { name: pr.name, score: score(d), pu: doneOf(d, 'Pushups'), sq: doneOf(d, 'Squats'), owed: owedTotal(pr.log.filter(e => !e.done)) };
+    return { name: pr.name, score: score(d), pu: doneOf(d, 'Pushups'), sq: doneOf(d, 'Squats'), su: doneOf(d, 'Situps'), owed: owedTotal(pr.log.filter(e => !e.done)) };
   }).sort((a, b) => b.score - a.score);
-  $('board').innerHTML = ranked.map((r, i) => `<li><span><span class="rank">#${i + 1}</span>${esc(r.name)}</span><span><b style="color:var(--gold)">${r.score}</b> <span style="color:var(--muted)">· ${r.pu} pushups · ${r.sq} squats · ${r.owed} owed</span></span></li>`).join('');
+  $('board').innerHTML = ranked.map((r, i) => `<li><span><span class="rank">#${i + 1}</span>${esc(r.name)}</span><span><b style="color:var(--gold)">${r.score}</b> <span style="color:var(--muted)">· ${r.pu} pushups · ${r.sq} squats · ${r.su} situps · ${r.owed} owed</span></span></li>`).join('');
 
   save();
 }
@@ -267,7 +280,7 @@ function logEvent(evId) {
   p.log.push(entry);
   $('note').value = '';
   render();
-  toast(`+${ev.reps} pushups / ${ev.reps * SQUAT_MULT} squats (${ev.name})`, () => { p.log = p.log.filter(e => e.id !== entry.id); });
+  toast(`+${ev.reps} pushups / ${altText(ev.reps)} (${ev.name})`, () => { p.log = p.log.filter(e => e.id !== entry.id); });
 }
 
 $('events').onclick = e => { const b = e.target.closest('.event'); if (b) logEvent(b.dataset.id); };
@@ -307,8 +320,7 @@ function completeAll(ex) {
   toast(`${reps} ${ex.toLowerCase()} completed 💪`, () => pending.forEach(e => { e.done = false; e.doneTs = null; e.exercise = null; }));
   render();
 }
-$('doAll').onclick = () => completeAll('Pushups');
-$('doAllSquats').onclick = () => completeAll('Squats');
+$('doAllBtns').onclick = e => { const b = e.target.closest('[data-all]'); if (b) completeAll(b.dataset.all); };
 
 // ---- profiles ----
 $('tabs').onclick = e => { const t = e.target.closest('.tab'); if (t) { state.activeId = t.dataset.id; render(); } };
@@ -340,12 +352,12 @@ function cfgRow(ev = { id: uid(), name: '', reps: 10 }) {
   return `<div class="cfg-row" data-id="${ev.id}">
     <input class="c-name" value="${esc(ev.name)}" placeholder="e.g. Ganked">
     <input class="c-reps" type="number" min="1" value="${ev.reps}">
-    <span class="c-sq" style="align-self:center;color:var(--muted)">${ev.reps * SQUAT_MULT} squats</span>
+    <span class="c-sq" style="align-self:center;color:var(--muted)">${altText(ev.reps)}</span>
     <button class="icon-btn x c-del" title="Remove">✕</button>
   </div>`;
 }
 $('cfgRows').oninput = e => {
-  if (e.target.matches('.c-reps')) e.target.closest('.cfg-row').querySelector('.c-sq').textContent = `${(parseInt(e.target.value, 10) || 0) * SQUAT_MULT} squats`;
+  if (e.target.matches('.c-reps')) e.target.closest('.cfg-row').querySelector('.c-sq').textContent = altText(parseInt(e.target.value, 10) || 0);
 };
 $('editEvents').onclick = () => {
   const p = active();
