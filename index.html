@@ -157,6 +157,7 @@ const EXERCISES = [
   { name: 'Pushups', mult: 1 },
   { name: 'Squats', mult: 2 },
   { name: 'Situps', mult: 2 },
+  { name: 'Jumping Jacks', mult: 3 },
 ];
 const MULT = Object.fromEntries(EXERCISES.map(x => [x.name, x.mult]));
 const ALTS = EXERCISES.filter(x => x.name !== 'Pushups');
@@ -226,7 +227,7 @@ function render() {
   $('stats').innerHTML = `
     <div class="stat owed"><div class="label">Owed now</div><div class="val">${owed}</div><div class="sub">${owed ? `pushups, or ${altText(owed)}` : 'all caught up'}</div></div>
     ${EXERCISES.map(x => `<div class="stat"><div class="label">${x.name} done</div><div class="val">${doneOf(done, x.name)}</div>${x.mult !== 1 ? `<div class="sub">count ×${x.mult}</div>` : ''}</div>`).join('')}
-    <div class="stat"><div class="label">Score</div><div class="val">${score(done)}</div><div class="sub">in pushups (squats & situps ÷ 2)</div></div>
+    <div class="stat"><div class="label">Score</div><div class="val">${score(done)}</div><div class="sub">in pushups (other reps ÷ their multiplier)</div></div>
     <div class="stat"><div class="label">Events logged</div><div class="val">${p.log.length}</div></div>`;
 
   $('events').innerHTML = p.events.map((ev, i) => `
@@ -252,9 +253,9 @@ function render() {
 
   const ranked = state.profiles.map(pr => {
     const d = pr.log.filter(e => e.done);
-    return { name: pr.name, score: score(d), pu: doneOf(d, 'Pushups'), sq: doneOf(d, 'Squats'), su: doneOf(d, 'Situps'), owed: owedTotal(pr.log.filter(e => !e.done)) };
+    return { name: pr.name, score: score(d), by: EXERCISES.map(x => `${doneOf(d, x.name)} ${x.name.toLowerCase()}`).join(' · '), owed: owedTotal(pr.log.filter(e => !e.done)) };
   }).sort((a, b) => b.score - a.score);
-  $('board').innerHTML = ranked.map((r, i) => `<li><span><span class="rank">#${i + 1}</span>${esc(r.name)}</span><span><b style="color:var(--gold)">${r.score}</b> <span style="color:var(--muted)">· ${r.pu} pushups · ${r.sq} squats · ${r.su} situps · ${r.owed} owed</span></span></li>`).join('');
+  $('board').innerHTML = ranked.map((r, i) => `<li><span><span class="rank">#${i + 1}</span>${esc(r.name)}</span><span><b style="color:var(--gold)">${r.score}</b> <span style="color:var(--muted)">· ${r.by} · ${r.owed} owed</span></span></li>`).join('');
 
   save();
 }
