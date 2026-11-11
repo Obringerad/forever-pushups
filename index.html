@@ -61,6 +61,14 @@
   .row-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
   .row-head h2 { margin: 0; }
   .empty { color: var(--muted); font-style: italic; padding: 12px 4px; }
+  .bars { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto; }
+  .bars li { display: grid; grid-template-columns: minmax(110px, 40%) 1fr 36px; align-items: center; gap: 10px; padding: 5px 2px; font-size: 14px; }
+  .bars .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bars .lbl small { color: var(--muted); }
+  .bars .track { height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; }
+  .bars .fill { height: 100%; background: var(--gold-dim); border-radius: 5px; }
+  .bars .cnt { text-align: right; font-weight: 700; color: var(--gold); }
+  .muted-sm { color: var(--muted); font-size: 13px; }
   #queue li { flex-wrap: wrap; gap: 6px; }
   #queue li .what { flex: 1 1 100%; }
   #queue li .btn { padding: 5px 9px; font-size: 12px; }
@@ -101,7 +109,8 @@
   <section class="panel full">
     <div class="row-head"><h2>Something happened in WoW…</h2><button class="btn" id="editEvents">Edit buttons</button></div>
     <div class="note-row">
-      <input id="note" placeholder="Note for the next click (optional) – e.g. Duskwood, Hogger, Warsong Gulch…">
+      <input id="note" list="placeList" autocomplete="off" placeholder="Note for the next click (optional) – e.g. Menethil, Hogger, Warsong Gulch…">
+      <datalist id="placeList"></datalist>
     </div>
     <div class="events" id="events"></div>
   </section>
@@ -114,6 +123,16 @@
   <section class="panel">
     <div class="row-head"><h2>Completed</h2></div>
     <ul class="list" id="history"></ul>
+  </section>
+
+  <section class="panel">
+    <h2>Tally</h2>
+    <ul class="bars" id="tally"></ul>
+  </section>
+
+  <section class="panel">
+    <div class="row-head"><h2>Zones flown to</h2><span class="muted-sm" id="zoneCount"></span></div>
+    <ul class="bars" id="zones"></ul>
   </section>
 
   <section class="panel full">
@@ -164,6 +183,138 @@ const ALTS = EXERCISES.filter(x => x.name !== 'Pushups');
 const altText = reps => ALTS.map(x => `${reps * x.mult} ${x.name.toLowerCase()}`).join(' or ');
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+// ---- Zones: zone name -> towns / flight points / nicknames that belong to it ----
+const ZONES = {
+  // Eastern Kingdoms
+  'Stormwind City': ['stormwind', 'sw', 'stormwind city'],
+  'Ironforge': ['if'],
+  'Undercity': ['uc'],
+  'Elwynn Forest': ['elwynn', 'goldshire', 'northshire'],
+  'Dun Morogh': ['kharanos', 'coldridge', 'anvilmar', 'gnomeregan'],
+  'Tirisfal Glades': ['tirisfal', 'brill', 'deathknell'],
+  'Westfall': ['sentinel hill', 'moonbrook', 'deadmines'],
+  'Redridge Mountains': ['redridge', 'lakeshire', 'lake everstill'],
+  'Duskwood': ['darkshire', 'raven hill'],
+  'Loch Modan': ['thelsamar', 'loch'],
+  'Wetlands': ['menethil', 'menethil harbor', 'menethil harbour', 'dun modr'],
+  'Silverpine Forest': ['silverpine', 'sepulcher', 'the sepulcher', 'pyrewood'],
+  'Hillsbrad Foothills': ['hillsbrad', 'southshore', 'tarren mill'],
+  'Alterac Mountains': ['alterac'],
+  'Arathi Highlands': ['arathi', 'refuge pointe', 'refuge point', 'hammerfall', 'stromgarde'],
+  'The Hinterlands': ['hinterlands', 'aerie peak', 'revantusk', 'revantusk village'],
+  'Badlands': ['kargath', 'uldaman'],
+  'Searing Gorge': ['thorium point'],
+  'Burning Steppes': ['morgans vigil', 'flame crest', 'blackrock mountain', 'brm'],
+  'Swamp of Sorrows': ['stonard'],
+  'Blasted Lands': ['nethergarde', 'nethergarde keep', 'dark portal'],
+  'Deadwind Pass': ['karazhan', 'deadwind'],
+  'Stranglethorn Vale': ['stranglethorn', 'stv', 'booty bay', 'grom gol', 'gromgol', 'grom gol base camp', 'rebel camp', 'nesingwary', 'zul gurub'],
+  'Western Plaguelands': ['wpl', 'chillwind', 'chillwind camp', 'chillwind point', 'bulwark', 'the bulwark', 'scholomance'],
+  'Eastern Plaguelands': ['epl', 'lights hope', 'lights hope chapel', 'light s hope', 'stratholme'],
+  // Kalimdor
+  'Orgrimmar': ['org', 'orgrimmar'],
+  'Thunder Bluff': ['tb'],
+  'Darnassus': ['darn'],
+  'Teldrassil': ['rut theran', 'ruttheran', 'rutheran', 'rut theran village', 'dolanaar', 'aldrassil'],
+  'Darkshore': ['auberdine'],
+  'Durotar': ['razor hill', 'sen jin', 'senjin', 'valley of trials'],
+  'Mulgore': ['bloodhoof', 'bloodhoof village', 'camp narache'],
+  'The Barrens': ['barrens', 'crossroads', 'xroads', 'the crossroads', 'ratchet', 'camp taurajo', 'taurajo', 'wailing caverns'],
+  'Ashenvale': ['astranaar', 'splintertree', 'splintertree post', 'forest song', 'zoram gar', 'zoramgar'],
+  'Stonetalon Mountains': ['stonetalon', 'stonetalon peak', 'sun rock', 'sun rock retreat'],
+  'Desolace': ['nijels point', 'nijel s point', 'shadowprey', 'shadowprey village', 'maraudon'],
+  'Thousand Needles': ['needles', 'freewind', 'freewind post', 'shimmering flats'],
+  'Feralas': ['feathermoon', 'feathermoon stronghold', 'camp mojache', 'mojache', 'thalanaar', 'dire maul'],
+  'Dustwallow Marsh': ['dustwallow', 'theramore', 'brackenwall', 'brackenwall village', 'onyxias lair'],
+  'Tanaris': ['gadgetzan', 'zul farrak', 'zf'],
+  "Un'Goro Crater": ['ungoro', 'un goro', 'marshals refuge', 'marshal s refuge'],
+  'Silithus': ['cenarion hold', 'aq'],
+  'Azshara': ['talrendis', 'talrendis point', 'valormok'],
+  'Felwood': ['talonbranch', 'talonbranch glade', 'bloodvenom', 'bloodvenom post', 'emerald sanctuary'],
+  'Winterspring': ['everlook'],
+  'Moonglade': ['nighthaven'],
+  // Battlegrounds
+  'Warsong Gulch': ['wsg', 'warsong'],
+  'Arathi Basin': ['ab'],
+  'Alterac Valley': ['av'],
+  // Outland
+  'Hellfire Peninsula': ['hellfire', 'honor hold', 'thrallmar', 'temple of telhamat', 'falcon watch'],
+  'Zangarmarsh': ['zangar', 'telredor', 'zabra jin', 'zabrajin', 'cenarion refuge', 'orebor harborage', 'swamprat post'],
+  'Terokkar Forest': ['terokkar', 'allerian stronghold', 'stonebreaker hold'],
+  'Shattrath City': ['shattrath', 'shatt'],
+  'Nagrand': ['telaar', 'garadar'],
+  "Blade's Edge Mountains": ['blades edge', 'blade s edge', 'sylvanaar', 'thunderlord stronghold', 'toshleys station', 'evergrove', 'mok nathal village'],
+  'Netherstorm': ['area 52', 'area52', 'cosmowrench'],
+  'Shadowmoon Valley': ['shadowmoon', 'wildhammer stronghold', 'shadowmoon village', 'altar of shatar', 'sanctum of the stars'],
+  'Eversong Woods': ['eversong'],
+  'Silvermoon City': ['silvermoon'],
+  'Ghostlands': ['tranquillien'],
+  'Azuremyst Isle': ['azuremyst'],
+  'The Exodar': ['exodar'],
+  'Bloodmyst Isle': ['bloodmyst', 'blood watch'],
+  "Isle of Quel'Danas": ['quel danas', 'queldanas', 'sun s reach', 'suns reach'],
+  // Northrend
+  'Borean Tundra': ['borean', 'valiance keep', 'warsong hold', 'fizzcrank', 'amber ledge', 'transitus shield', 'unu pe', 'taunka le village', 'bor gorok outpost'],
+  'Howling Fjord': ['howling', 'valgarde', 'vengeance landing', 'fort wildervar', 'westguard keep', 'camp winterhoof', 'new agamand', 'kamagua', 'apothecary camp'],
+  'Dragonblight': ['wintergarde', 'wintergarde keep', 'agmars hammer', 'agmar s hammer', 'stars rest', 'fordragon hold', 'kor koron vanguard', 'wyrmrest temple', 'moa ki harbor', 'venomspite'],
+  'Grizzly Hills': ['grizzly', 'amberpine lodge', 'conquest hold', 'westfall brigade', 'camp oneqwah'],
+  "Zul'Drak": ['zuldrak', 'zul drak', 'the argent stand', 'argent stand', 'zim torga', 'gundrak', 'ebon watch', 'light s breach'],
+  'Sholazar Basin': ['sholazar', 'nesingwary base camp', 'river s heart'],
+  'The Storm Peaks': ['storm peaks', 'k3', 'frosthold', 'bouldercrag s refuge', 'grom arsh crash site', 'camp tunka lo', 'ulduar', 'dun niffelem'],
+  'Icecrown': ['argent tournament', 'the shadow vault', 'death s rise', 'crusaders pinnacle', 'icc'],
+  'Crystalsong Forest': ['crystalsong', 'windrunners overlook', 'sunreaver s command'],
+  'Dalaran': ['dal', 'dalaran'],
+  'Wintergrasp': ['wg'],
+};
+
+const normName = s => String(s || '').toLowerCase().replace(/[’'`]/g, ' ').replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^the /, '');
+const ZONE_ALIASES = [];   // [normalized alias, zone]
+for (const [zone, aliases] of Object.entries(ZONES))
+  for (const a of [zone, ...aliases]) ZONE_ALIASES.push([normName(a), zone]);
+const ZONE_EXACT = new Map(ZONE_ALIASES);
+ZONE_ALIASES.sort((a, b) => b[0].length - a[0].length); // longest first for "contains" matching
+
+function lev(a, b) {
+  const d = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = d[0]; d[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const tmp = d[j];
+      d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return d[b.length];
+}
+
+// "menethil" -> "Wetlands", "Lakeshire" -> "Redridge Mountains", "Thousand need" -> "Thousand Needles".
+// Unknown text comes back as typed (trimmed), or null if empty.
+const zoneCache = new Map();
+function zoneOf(text) {
+  const n = normName(text);
+  if (!n) return null;
+  if (zoneCache.has(n)) return zoneCache.get(n);
+  let zone = ZONE_EXACT.get(n);
+  // the note mentions a known place, e.g. "Menethil Harbor FP"
+  if (!zone) { const hit = ZONE_ALIASES.find(([a]) => a.length >= 3 && ` ${n} `.includes(` ${a} `)); zone = hit?.[1]; }
+  // the note is the start of a known place, e.g. "Thousand need"
+  if (!zone && n.length >= 5) zone = ZONE_ALIASES.find(([a]) => a.startsWith(n))?.[1];
+  // small typo, e.g. "Menethl", "Lakeshre"
+  if (!zone && n.length >= 5) {
+    let best = null, bestD = Infinity;
+    for (const [a, z] of ZONE_ALIASES) {
+      if (a.length < 5 || Math.abs(a.length - n.length) > 2) continue;
+      const dist = lev(n, a);
+      if (dist < bestD) { bestD = dist; best = z; }
+    }
+    if (bestD <= (n.length >= 9 ? 2 : 1)) zone = best;
+  }
+  zone = zone || String(text).trim();
+  zoneCache.set(n, zone);
+  return zone;
+}
+const isFlight = name => /flight|\bfp\b/i.test(name);
+
 function defaultEvents(flightReps = 5) {
   return [
     { id: uid(), name: 'PvE Death', reps: 10 },
@@ -199,6 +350,12 @@ function seedState() {
   ]};
   return { profiles: [alex, jeff], activeId: alex.id };
 }
+
+// Autocomplete for the note box: every zone plus its towns written out properly.
+document.getElementById('placeList').innerHTML = Object.keys(ZONES).sort()
+  .map(z => `<option value="${z.replace(/"/g, '&quot;')}">`).join('') +
+  ['Menethil Harbor', 'Lakeshire', 'Sentinel Hill', 'Darkshire', 'Thelsamar', 'Southshore', 'Tarren Mill', 'Refuge Pointe', 'Hammerfall', 'Aerie Peak', 'Booty Bay', "Grom'gol", 'Rebel Camp', 'Kargath', 'Thorium Point', "Morgan's Vigil", 'Flame Crest', 'Stonard', 'Nethergarde Keep', 'Chillwind Camp', "Light's Hope Chapel", 'The Sepulcher', 'Brill', 'Goldshire', "Rut'theran Village", 'Auberdine', 'Astranaar', 'Splintertree Post', 'The Crossroads', 'Ratchet', 'Camp Taurajo', 'Freewind Post', "Nijel's Point", 'Shadowprey Village', 'Feathermoon Stronghold', 'Camp Mojache', 'Thalanaar', 'Theramore', 'Brackenwall Village', 'Gadgetzan', "Marshal's Refuge", 'Cenarion Hold', 'Talonbranch Glade', 'Bloodvenom Post', 'Everlook', 'Nighthaven', 'Stonetalon Peak', 'Sun Rock Retreat', 'Razor Hill', 'Bloodhoof Village', 'Talrendis Point', 'Valormok']
+    .sort().map(t => `<option value="${t.replace(/"/g, '&quot;')}">${zoneOf(t)}</option>`).join('');
 
 let state;
 try { state = JSON.parse(localStorage.getItem(STORE_KEY)); } catch {}
@@ -238,9 +395,44 @@ function render() {
       <div class="ex">pushups · or ${altText(ev.reps)}</div>
     </button>`).join('') || '<div class="empty">No buttons yet — click "Edit buttons".</div>';
 
+  // ---- tally of each event type, and zones flown to ----
+  const bars = (rows, emptyMsg) => {
+    const max = Math.max(1, ...rows.map(r => r.n));
+    return rows.map(r => `<li><span class="lbl" title="${esc(r.title || r.label)}">${r.html || esc(r.label)}</span>
+      <span class="track"><span class="fill" style="display:block;width:${(r.n / max) * 100}%"></span></span>
+      <span class="cnt">${r.n}</span></li>`).join('') || `<li class="empty" style="display:block">${emptyMsg}</li>`;
+  };
+  const counts = new Map(p.events.map(ev => [ev.name, 0]));
+  for (const e of p.log) counts.set(e.eventName, (counts.get(e.eventName) || 0) + 1);
+  $('tally').innerHTML = bars([...counts].map(([label, n]) => ({ label, n })), 'Nothing logged yet.');
+
+  const zones = new Map(); // zone -> { n, places:Set }
+  let unnamed = 0;
+  for (const e of p.log) {
+    if (!isFlight(e.eventName)) continue;
+    const z = zoneOf(e.note);
+    if (!z) { unnamed++; continue; }
+    const rec = zones.get(z) || { n: 0, places: new Set() };
+    rec.n++;
+    if (!normName(z).startsWith(normName(e.note))) rec.places.add(e.note.trim()); // e.g. show "Menethil", not "Redridge"
+    zones.set(z, rec);
+  }
+  const zoneRows = [...zones].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0])).map(([z, r]) => {
+    const places = [...r.places].join(', ');
+    return { label: z, n: r.n, title: places ? `${z} (${places})` : z, html: `${esc(z)}${places ? ` <small>${esc(places)}</small>` : ''}` };
+  });
+  if (unnamed) zoneRows.push({ label: 'No zone entered', n: unnamed, html: '<i style="color:var(--muted)">No zone entered</i>' });
+  $('zones').innerHTML = bars(zoneRows, 'No flights yet. Type where you flew in the note box, then hit Flight Point.');
+  $('zoneCount').textContent = zones.size ? `${zones.size} zone${zones.size === 1 ? '' : 's'}` : '';
+
+  const noteLine = e => {
+    if (!e.note) return '&nbsp;';
+    const z = isFlight(e.eventName) ? zoneOf(e.note) : null;
+    return z && normName(z) !== normName(e.note) ? `${esc(e.note)} → ${esc(z)}` : esc(e.note);
+  };
   const item = (e, isQueue) => `
     <li>
-      <div class="what">${esc(e.eventName)}<div class="n">${esc(e.note) || '&nbsp;'} · ${fmtTime(isQueue ? e.ts : e.doneTs)}</div></div>
+      <div class="what">${esc(e.eventName)}<div class="n">${noteLine(e)} · ${fmtTime(isQueue ? e.ts : e.doneTs)}</div></div>
       ${isQueue
         ? `${EXERCISES.map(x => `<button class="btn" data-act="done" data-ex="${x.name}" data-id="${e.id}" title="Did them as ${x.name.toLowerCase()}">✓ ${e.reps * x.mult} ${x.name.toLowerCase()}</button>`).join('')}
            <button class="icon-btn x" data-act="del" data-id="${e.id}" title="Delete">✕</button>`
