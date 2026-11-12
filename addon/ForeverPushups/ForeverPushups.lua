@@ -6,14 +6,11 @@
 local ADDON_NAME = ...
 local MAX_EVENTS = 1000
 local HIT_WINDOW = 20 -- seconds: how recent the last hit must be to blame it for a death
-local PLAYER_CONTROL = COMBATLOG_OBJECT_CONTROL_PLAYER or 0x00000100
 
 local GOLD = "|cfff0c050"
 local LABEL = { pve = "PvE Death", pvp = "PvP Death", fall = "Falling Death", flight = "Flight Point" }
 
 local db
-local playerGUID
-local lastHit
 local sessionCount = 0
 
 local function say(msg)
@@ -48,41 +45,91 @@ local function record(kind, info)
 end
 
 -- ---------- deaths ----------
-local DAMAGE = {
-  SWING_DAMAGE = true, RANGE_DAMAGE = true, SPELL_DAMAGE = true, SPELL_PERIODIC_DAMAGE = true,
-  DAMAGE_SHIELD = true, DAMAGE_SPLIT = true, SPELL_INSTAKILL = true,
-}
+-- WoW Forever does not let addons read the combat log (registering for it gets the
+-- addon blocked), and some unit values can come back as "secret". So instead we:
+--   * watch IsFalling() to spot long falls,
+--   * keep scanning target + nameplates for whoever is attacking us,
+--   * decide PvE / PvP / falling when PLAYER_DEAD fires.
 
-local function onCombatLog()
-  local _, sub, _, _, srcName, srcFlags, _, dstGUID = CombatLogGetCurrentEventInfo()
-  if dstGUID ~= playerGUID then return end
-  if sub == "ENVIRONMENTAL_DAMAGE" then
-    local envType = select(12, CombatLogGetCurrentEventInfo())
-    lastHit = { at = GetTime(), env = envType and tostring(envType) or "Environment" }
-  elseif DAMAGE[sub] then
-    lastHit = { at = GetTime(), src = srcName, pvp = bit.band(srcFlags or 0, PLAYER_CONTROL) > 0 }
+-- Call fn safely; nil if it errors or the value is secret.
+local function safe(fn, ...)
+  if not fn then return nil end
+  local ok, v = pcall(fn, ...)
+  if not ok then return nil end
+  if issecretvalue and issecretvalue(v) then return nil end
+  return v
+end
+
+local FALL_MIN = 1.0      -- seconds in the air before it counts as a real fall (a jump is ~0.7s)
+local FALL_RECENT = 2.0   -- death must come within this long after landing
+local fallStart, lastLongFall
+local lastPvp, lastMob    -- { name, at }
+
+local function attacker(unit)
+  if not safe(UnitExists, unit) then return end
+  if safe(UnitIsDead, unit) then return end
+  if not safe(UnitCanAttack, "player", unit) then return end
+  if not safe(UnitIsUnit, unit .. "target", "player") then return end
+  local name = safe(UnitName, unit)
+  if type(name) ~= "string" or name == "" then name = nil end
+  local pvp = safe(UnitIsPlayer, unit) or safe(UnitPlayerControlled, unit)
+  return name, pvp
+end
+
+local function scanAttackers()
+  local now = GetTime()
+  local units = { "target", "focus", "mouseover" }
+  for i = 1, 40 do units[#units + 1] = "nameplate" .. i end
+  for _, u in ipairs(units) do
+    local name, pvp = attacker(u)
+    if name or pvp ~= nil then
+      if pvp then lastPvp = { name = name, at = now }
+      elseif not lastMob or lastMob.at ~= now then lastMob = { name = name, at = now } end
+    end
   end
 end
 
-local function titleCase(s)
-  s = tostring(s):lower()
-  return (s:gsub("^%l", string.upper))
+local function watchFalling()
+  local now = GetTime()
+  if safe(IsFalling, "player") then
+    fallStart = fallStart or now
+  elseif fallStart then
+    if now - fallStart >= FALL_MIN then lastLongFall = now end
+    fallStart = nil
+  end
+end
+
+local function inPvPInstance()
+  local _, kind = IsInInstance()
+  return kind == "pvp" or kind == "arena"
 end
 
 local function onDeath()
-  local h = lastHit
-  if h and GetTime() - h.at > HIT_WINDOW then h = nil end
-  lastHit = nil
-  if h and h.env then
-    if h.env:upper() == "FALLING" then
-      record("fall")
-    else
-      record("pve", { killer = titleCase(h.env) }) -- drowning, lava, fatigue...
-    end
-  elseif h and h.pvp then
-    record("pvp", { killer = h.src })
+  local now = GetTime()
+  scanAttackers()
+  watchFalling()
+  local falling = (fallStart and now - fallStart >= FALL_MIN) or (lastLongFall and now - lastLongFall <= FALL_RECENT)
+  local pvp = lastPvp and now - lastPvp.at <= HIT_WINDOW and lastPvp
+  local mob = lastMob and now - lastMob.at <= HIT_WINDOW and lastMob
+  fallStart, lastLongFall, lastPvp, lastMob = nil, nil, nil, nil
+
+  if falling then
+    record("fall")
+  elseif pvp or inPvPInstance() then
+    record("pvp", { killer = pvp and pvp.name or nil })
   else
-    record("pve", { killer = h and h.src or nil })
+    record("pve", { killer = mob and mob.name or nil })
+  end
+end
+
+local ticker, scanTicker = 0, 0
+local function onUpdate(_, elapsed)
+  ticker = ticker + elapsed
+  if ticker >= 0.1 then ticker = 0; watchFalling() end
+  scanTicker = scanTicker + elapsed
+  if scanTicker >= 0.5 then
+    scanTicker = 0
+    if safe(UnitAffectingCombat, "player") then scanAttackers() end
   end
 end
 
@@ -107,7 +154,7 @@ local f = CreateFrame("Frame")
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_LOGIN")
 f:RegisterEvent("PLAYER_DEAD")
-f:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+f:SetScript("OnUpdate", onUpdate)
 f:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
     ForeverPushupsDB = ForeverPushupsDB or {}
@@ -115,10 +162,7 @@ f:SetScript("OnEvent", function(_, event, arg1)
     db.version = 1
     db.events = db.events or {}
   elseif event == "PLAYER_LOGIN" then
-    playerGUID = UnitGUID("player")
     if TakeTaxiNode then hooksecurefunc("TakeTaxiNode", onTakeTaxi) end
-  elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
-    onCombatLog()
   elseif event == "PLAYER_DEAD" then
     onDeath()
   end
@@ -138,11 +182,8 @@ SlashCmdList.FOREVERPUSHUPS = function(msg)
     end
   elseif msg == "test" then
     record("pve", { killer = "Test Dummy" })
-  elseif msg == "sync" then
-    ReloadUI()
   else
-    say(string.format("%d event(s) logged this session, %d stored.", sessionCount, #db.events))
-    say("/pushups sync - reload to send events to the site")
+    say(string.format("%d event(s) logged this session, %d stored. Type /reload to send them to the site.", sessionCount, #db.events))
     say("/pushups undo - remove the last event from this session")
     say("/pushups test - log a fake PvE death to test the link")
   end

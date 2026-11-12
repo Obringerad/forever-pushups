@@ -186,6 +186,7 @@
     <button class="btn" id="importAddonOnce">Import addon file once</button>
     <button class="btn danger" id="unlinkAddon">Unlink all</button>
     <input type="file" id="addonFile" accept=".lua" hidden>
+    <input type="file" id="linkFile" accept=".lua" hidden>
   </div>
   <div id="charMap" style="margin-top:10px;font-size:14px"></div>
 
@@ -752,10 +753,19 @@ async function loadLinks() {
   try { links = ((await idb.get('links')) || []).map(h => ({ handle: h, lastModified: 0, status: 'perm' })); } catch { links = []; }
   await pollLinks();
 }
-const saveLinks = () => idb.set('links', links.map(l => l.handle)).catch(() => {});
+const saveLinks = () => idb.set('links', links.filter(l => l.handle).map(l => l.handle)).catch(() => {});
 
 async function pollLinks() {
   for (const l of links) {
+    // Firefox / Waterfox: no file handles, so we keep the picked File and re-read it.
+    if (l.file) {
+      try {
+        const text = await l.file.text();
+        l.status = 'ok';
+        if (text !== l.lastText) { l.lastText = text; importAddonText(text); l.lastSync = Date.now(); }
+      } catch (err) { l.status = 'lost'; console.warn('Addon file', err); }
+      continue;
+    }
     try {
       const perm = await l.handle.queryPermission({ mode: 'read' });
       if (perm !== 'granted') { l.status = 'perm'; continue; }
@@ -777,7 +787,7 @@ setInterval(() => { if (links.length && !document.hidden) pollLinks(); }, 3000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && links.length) pollLinks(); });
 
 async function linkAddon() {
-  if (!canLink) { alert('Auto-linking needs Chrome or Edge. Use "Import addon file once" instead.'); return; }
+  if (!canLink) { $('linkFile').click(); return; }
   try {
     const [handle] = await window.showOpenFilePicker({ types: [{ description: 'ForeverPushups.lua', accept: { 'text/plain': ['.lua'] } }] });
     for (const l of links) if (await l.handle.isSameEntry(handle)) { toast('That file is already linked.'); return; }
@@ -796,13 +806,16 @@ function renderAddon() {
   const bar = $('addonBar');
   if (!bar) return;
   if (!links.length) {
-    bar.innerHTML = `<span class="dot"></span> WoW addon not linked <button class="btn" data-addon="link">🔗 Link addon file</button>`;
+    bar.innerHTML = `<span class="dot"></span> WoW addon not linked <button class="btn" data-addon="link">🔗 Link addon file</button>
+      ${canLink ? '' : '<span>(Firefox/Waterfox: pick it once each time you open the page – or drag the file onto the page)</span>'}`;
   } else {
     const bad = links.filter(l => l.status !== 'ok');
     const last = Math.max(0, ...links.map(l => l.lastSync || 0));
-    bar.innerHTML = bad.length
+    bar.innerHTML = bad.some(l => l.status === 'lost')
+      ? `<span class="dot warn"></span> Lost access to the addon file <button class="btn primary" data-addon="link">Pick it again</button>`
+      : bad.length
       ? `<span class="dot warn"></span> WoW addon linked, but the browser needs your OK to read it <button class="btn primary" data-addon="reconnect">Reconnect</button>`
-      : `<span class="dot on"></span> WoW addon linked (${links.length} file${links.length === 1 ? '' : 's'}) – type <code>/reload</code> in game to sync${last ? ` · checked ${fmtTime(last)}` : ''}`;
+      : `<span class="dot on"></span> WoW addon linked (${links.length} file${links.length === 1 ? '' : 's'}) – type <code>/reload</code> in game to sync${last ? ` · last new events ${fmtTime(last)}` : ''}`;
   }
   const map = Object.entries(state.charMap || {});
   $('charMap').innerHTML = map.length ? '<div style="color:var(--muted);margin-bottom:4px">Characters → players</div>' + map.map(([ch, pid]) => `
@@ -814,6 +827,25 @@ $('addonBar').onclick = e => { const b = e.target.closest('[data-addon]'); if (!
 $('linkAddon').onclick = linkAddon;
 $('unlinkAddon').onclick = async () => { if (!links.length || !confirm('Stop reading the linked addon file(s)? Already imported events stay.')) return; links = []; await saveLinks(); renderAddon(); };
 $('importAddonOnce').onclick = () => $('addonFile').click();
+// Firefox / Waterfox link: keep the File object for this visit and keep re-reading it.
+async function linkFileObject(file) {
+  if (!file) return;
+  try { parseLuaSV(await file.text()); }
+  catch (err) { alert('That doesn\'t look like a ForeverPushups.lua file. ' + err.message); return; }
+  links = links.filter(l => !(l.file && l.file.name === file.name));
+  links.push({ file, lastText: null, status: 'ok' });
+  await pollLinks();
+  toast(`Watching ${file.name}. New events show up after /reload in WoW.`);
+}
+$('linkFile').onchange = e => { linkFileObject(e.target.files[0]); e.target.value = ''; };
+// Drag ForeverPushups.lua anywhere onto the page.
+document.addEventListener('dragover', e => { if ([...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); });
+document.addEventListener('drop', e => {
+  const file = [...(e.dataTransfer?.files || [])].find(f => /\.lua$/i.test(f.name));
+  if (!file) return;
+  e.preventDefault();
+  linkFileObject(file);
+});
 $('addonFile').onchange = async e => {
   const file = e.target.files[0];
   if (!file) return;
