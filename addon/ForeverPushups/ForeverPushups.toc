@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: Forever Pushups
+## Notes: Logs your deaths, falling deaths and flights for the Forever Pushups tracker site. /reload to sync.
+## Author: Obringerad
+## Version: 1.0.0
+## SavedVariables: ForeverPushupsDB
+
+ForeverPushups.lua

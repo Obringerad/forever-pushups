@@ -87,6 +87,13 @@
   .cfg-head { font-size: 12px; color: var(--muted); }
   .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
 
+  .addon-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin: -4px 0 12px; }
+  .addon-bar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .addon-bar .dot.on { background: var(--green); }
+  .addon-bar .dot.warn { background: var(--gold); }
+  .addon-bar .btn { padding: 4px 10px; font-size: 12px; }
+  code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; word-break: break-all; }
+  .charmap-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
   .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--gold); color: var(--bg); font-weight: 600; padding: 10px 18px; border-radius: 8px; transition: transform .2s; display: flex; gap: 12px; align-items: center; }
   .toast.show { transform: translateX(-50%) translateY(0); }
   .toast button { background: var(--bg); color: var(--gold); border: none; border-radius: 5px; padding: 4px 10px; }
@@ -108,6 +115,7 @@
 
   <section class="panel full">
     <div class="row-head"><h2>Something happened in WoW…</h2><button class="btn" id="editEvents">Edit buttons</button></div>
+    <div class="addon-bar" id="addonBar"></div>
     <div class="note-row">
       <input id="note" list="placeList" autocomplete="off" placeholder="Note for the next click (optional) – e.g. Menethil, Hogger, Warsong Gulch…">
       <datalist id="placeList"></datalist>
@@ -164,6 +172,23 @@
     <button class="btn" id="importBtn">Import data</button>
     <input type="file" id="importFile" accept=".json" hidden>
   </div>
+
+  <h2 style="margin-top:22px">WoW addon</h2>
+  <p style="color:var(--muted);font-size:14px;margin-top:0">
+    The <b>Forever Pushups</b> addon logs deaths, falls and flights by itself.
+    <a href="ForeverPushups-addon.zip" style="color:var(--gold)">Download the addon</a>, unzip it into
+    <code>World of Warcraft\_forever_\Interface\AddOns</code>, then link its save file:
+    <code>World of Warcraft\_forever_\WTF\Account\&lt;account&gt;\SavedVariables\ForeverPushups.lua</code>
+    (it appears after your first <code>/reload</code> with the addon on).
+  </p>
+  <div class="dialog-actions" style="justify-content:flex-start;margin-top:0">
+    <button class="btn" id="linkAddon">🔗 Link addon file</button>
+    <button class="btn" id="importAddonOnce">Import addon file once</button>
+    <button class="btn danger" id="unlinkAddon">Unlink all</button>
+    <input type="file" id="addonFile" accept=".lua" hidden>
+  </div>
+  <div id="charMap" style="margin-top:10px;font-size:14px"></div>
+
   <div class="dialog-actions"><button class="btn primary" id="settingsClose">Close</button></div>
 </dialog>
 
@@ -291,9 +316,21 @@ function lev(a, b) {
 // Unknown text comes back as typed (trimmed), or null if empty.
 const zoneCache = new Map();
 function zoneOf(text) {
-  const n = normName(text);
+  const raw = String(text || '');
+  const n = normName(raw);
   if (!n) return null;
   if (zoneCache.has(n)) return zoneCache.get(n);
+  let zone;
+  // Flight names from the addon look like "Ironforge, Dun Morogh": prefer the town, then the zone after the comma.
+  const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+  if (parts.length > 1) zone = matchZone(normName(parts[0])) || matchZone(normName(parts[parts.length - 1]));
+  else zone = matchZone(n);
+  zone = zone || (parts.length > 1 ? parts[parts.length - 1] : raw.trim());
+  zoneCache.set(n, zone);
+  return zone;
+}
+function matchZone(n) {
+  if (!n) return null;
   let zone = ZONE_EXACT.get(n);
   // the note mentions a known place, e.g. "Menethil Harbor FP"
   if (!zone) { const hit = ZONE_ALIASES.find(([a]) => a.length >= 3 && ` ${n} `.includes(` ${a} `)); zone = hit?.[1]; }
@@ -309,9 +346,7 @@ function zoneOf(text) {
     }
     if (bestD <= (n.length >= 9 ? 2 : 1)) zone = best;
   }
-  zone = zone || String(text).trim();
-  zoneCache.set(n, zone);
-  return zone;
+  return zone || null;
 }
 const isFlight = name => /flight|\bfp\b/i.test(name);
 
@@ -448,6 +483,7 @@ function render() {
     const d = pr.log.filter(e => e.done);
     return { name: pr.name, score: score(d), by: EXERCISES.map(x => `${doneOf(d, x.name)} ${x.name.toLowerCase()}`).join(' · '), owed: owedTotal(pr.log.filter(e => !e.done)) };
   }).sort((a, b) => b.score - a.score);
+  if (typeof renderAddon === 'function') renderAddon();
   $('board').innerHTML = ranked.map((r, i) => `<li><span><span class="rank">#${i + 1}</span>${esc(r.name)}</span><span><b style="color:var(--gold)">${r.score}</b> <span style="color:var(--muted)">· ${r.by} · ${r.owed} owed</span></span></li>`).join('');
 
   save();
@@ -599,7 +635,211 @@ $('importFile').onchange = async e => {
   e.target.value = '';
 };
 
+// =====================================================================
+// WoW addon link: read ForeverPushups.lua (SavedVariables) and import new events
+// =====================================================================
+
+// Minimal parser for the Lua tables WoW writes to SavedVariables files.
+function parseLuaSV(src) {
+  let i = 0;
+  const err = m => { throw new Error(`${m} at ${i}`); };
+  const ws = () => {
+    for (;;) {
+      while (i < src.length && /\s/.test(src[i])) i++;
+      if (src.startsWith('--[[', i)) { const j = src.indexOf(']]', i); i = j < 0 ? src.length : j + 2; }
+      else if (src.startsWith('--', i)) { const j = src.indexOf('\n', i); i = j < 0 ? src.length : j + 1; }
+      else return;
+    }
+  };
+  const ident = () => { const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i, i + 200)); if (!m) return null; i += m[0].length; return m[0]; };
+  const str = () => {
+    const q = src[i++]; let out = '';
+    while (i < src.length && src[i] !== q) {
+      if (src[i] === '\\') {
+        const c = src[++i];
+        if (/\d/.test(c)) { const m = /^\d{1,3}/.exec(src.slice(i, i + 3)); out += String.fromCharCode(+m[0]); i += m[0].length; continue; }
+        out += ({ n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', f: '\f', v: '\v' })[c] ?? c; i++;
+      } else out += src[i++];
+    }
+    i++; return out;
+  };
+  function value() {
+    ws();
+    const c = src[i];
+    if (c === '{') return table();
+    if (c === '"' || c === "'") return str();
+    const num = /^-?(0x[0-9a-fA-F]+|\d+\.?\d*(e[+-]?\d+)?|\.\d+)/.exec(src.slice(i, i + 40));
+    if (num) { i += num[0].length; return Number(num[0]); }
+    const id = ident();
+    if (id === 'true') return true;
+    if (id === 'false') return false;
+    if (id === 'nil') return null;
+    err('Unexpected value');
+  }
+  function table() {
+    i++; const t = {}; let n = 1;
+    for (;;) {
+      ws();
+      if (src[i] === '}') { i++; return t; }
+      if (src[i] === '[') { i++; const k = value(); ws(); if (src[i++] !== ']') err('Expected ]'); ws(); if (src[i++] !== '=') err('Expected ='); t[k] = value(); }
+      else {
+        const save = i, id = ident(); ws();
+        if (id && src[i] === '=' && src[i + 1] !== '=') { i++; t[id] = value(); }
+        else { i = save; t[n++] = value(); }
+      }
+      ws();
+      if (src[i] === ',' || src[i] === ';') i++;
+    }
+  }
+  const out = {};
+  for (;;) { ws(); if (i >= src.length) return out; const id = ident(); if (!id) err('Expected name'); ws(); if (src[i++] !== '=') err('Expected ='); out[id] = value(); }
+}
+
+const ADDON_TYPES = {
+  pve:    { match: n => /pve/i.test(n),  name: 'PvE Death',     reps: 10 },
+  pvp:    { match: n => /pvp/i.test(n),  name: 'PvP Death',     reps: 5 },
+  fall:   { match: n => /fall/i.test(n), name: 'Falling Death', reps: 30 },
+  flight: { match: n => isFlight(n),     name: 'Flight Point',  reps: 5 },
+};
+
+// Returns how many new entries were added.
+function importAddonText(text) {
+  const sv = parseLuaSV(text);
+  const events = Object.values(sv.ForeverPushupsDB?.events || {}).filter(e => e && e.id && ADDON_TYPES[e.type]).sort((a, b) => a.t - b.t);
+  state.imported ||= {};
+  state.charMap ||= {};
+  let added = 0;
+  const newChars = [];
+  for (const ev of events) {
+    if (state.imported[ev.id]) continue;
+    const charKey = `${ev.char}-${ev.realm}`;
+    let p = state.profiles.find(x => x.id === state.charMap[charKey]);
+    if (!p) {
+      p = state.profiles.find(x => x.name.toLowerCase() === String(ev.char).toLowerCase()) || active();
+      state.charMap[charKey] = p.id;
+      newChars.push(`${ev.char} → ${p.name}`);
+    }
+    const T = ADDON_TYPES[ev.type];
+    const btn = p.events.find(b => T.match(b.name));
+    const where = ev.subzone && ev.subzone !== ev.zone ? `${ev.subzone}, ${ev.zone}` : ev.zone;
+    const note = ev.type === 'flight' ? (ev.dest || '') : [ev.killer, where].filter(Boolean).join(' – ');
+    p.log.push({ id: uid(), src: ev.id, char: charKey, eventName: btn?.name || T.name, reps: btn?.reps || T.reps,
+      note, ts: (ev.t || Date.now() / 1000) * 1000, done: false, doneTs: null, exercise: null });
+    state.imported[ev.id] = 1;
+    added++;
+  }
+  if (added || newChars.length) render();
+  if (added) toast(`WoW addon: ${added} new event${added === 1 ? '' : 's'} added${newChars.length ? ` (linked ${newChars.join(', ')})` : ''}`);
+  return added;
+}
+
+// ---- linked files (Chrome / Edge): remember the file handle and re-read it when WoW saves ----
+const idb = (() => {
+  let dbp;
+  const open = () => dbp ||= new Promise((res, rej) => {
+    const r = indexedDB.open('forever-pushups', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  const tx = async (mode, fn) => { const db = await open(); return new Promise((res, rej) => { const t = db.transaction('kv', mode); const req = fn(t.objectStore('kv')); t.oncomplete = () => res(req?.result); t.onerror = () => rej(t.error); }); };
+  return { get: k => tx('readonly', s => s.get(k)), set: (k, v) => tx('readwrite', s => s.put(v, k)) };
+})();
+
+let links = [];          // [{ handle, lastModified, status: 'ok'|'perm'|'missing', lastSync }]
+const canLink = 'showOpenFilePicker' in window;
+
+async function loadLinks() {
+  try { links = ((await idb.get('links')) || []).map(h => ({ handle: h, lastModified: 0, status: 'perm' })); } catch { links = []; }
+  await pollLinks();
+}
+const saveLinks = () => idb.set('links', links.map(l => l.handle)).catch(() => {});
+
+async function pollLinks() {
+  for (const l of links) {
+    try {
+      const perm = await l.handle.queryPermission({ mode: 'read' });
+      if (perm !== 'granted') { l.status = 'perm'; continue; }
+      const file = await l.handle.getFile();
+      l.status = 'ok';
+      if (file.lastModified !== l.lastModified) {
+        l.lastModified = file.lastModified;
+        importAddonText(await file.text());
+        l.lastSync = Date.now();
+      }
+    } catch (err) {
+      l.status = err?.name === 'NotFoundError' ? 'missing' : 'perm';
+      console.warn('Addon link', err);
+    }
+  }
+  renderAddon();
+}
+setInterval(() => { if (links.length && !document.hidden) pollLinks(); }, 3000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && links.length) pollLinks(); });
+
+async function linkAddon() {
+  if (!canLink) { alert('Auto-linking needs Chrome or Edge. Use "Import addon file once" instead.'); return; }
+  try {
+    const [handle] = await window.showOpenFilePicker({ types: [{ description: 'ForeverPushups.lua', accept: { 'text/plain': ['.lua'] } }] });
+    for (const l of links) if (await l.handle.isSameEntry(handle)) { toast('That file is already linked.'); return; }
+    links.push({ handle, lastModified: 0, status: 'ok' });
+    await saveLinks();
+    await pollLinks();
+    toast(`Linked ${handle.name}. New events show up after /reload in WoW.`);
+  } catch (err) { if (err?.name !== 'AbortError') alert('Could not link that file: ' + err.message); }
+}
+async function reconnect() {
+  for (const l of links) if (l.status !== 'ok') { try { await l.handle.requestPermission({ mode: 'read' }); } catch {} }
+  await pollLinks();
+}
+
+function renderAddon() {
+  const bar = $('addonBar');
+  if (!bar) return;
+  if (!links.length) {
+    bar.innerHTML = `<span class="dot"></span> WoW addon not linked <button class="btn" data-addon="link">🔗 Link addon file</button>`;
+  } else {
+    const bad = links.filter(l => l.status !== 'ok');
+    const last = Math.max(0, ...links.map(l => l.lastSync || 0));
+    bar.innerHTML = bad.length
+      ? `<span class="dot warn"></span> WoW addon linked, but the browser needs your OK to read it <button class="btn primary" data-addon="reconnect">Reconnect</button>`
+      : `<span class="dot on"></span> WoW addon linked (${links.length} file${links.length === 1 ? '' : 's'}) – type <code>/reload</code> in game to sync${last ? ` · checked ${fmtTime(last)}` : ''}`;
+  }
+  const map = Object.entries(state.charMap || {});
+  $('charMap').innerHTML = map.length ? '<div style="color:var(--muted);margin-bottom:4px">Characters → players</div>' + map.map(([ch, pid]) => `
+    <div class="charmap-row"><span style="min-width:160px">${esc(ch)}</span>
+    <select data-char="${esc(ch)}">${state.profiles.map(p => `<option value="${p.id}" ${p.id === pid ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>`).join('') : '';
+}
+
+$('addonBar').onclick = e => { const b = e.target.closest('[data-addon]'); if (!b) return; b.dataset.addon === 'link' ? linkAddon() : reconnect(); };
+$('linkAddon').onclick = linkAddon;
+$('unlinkAddon').onclick = async () => { if (!links.length || !confirm('Stop reading the linked addon file(s)? Already imported events stay.')) return; links = []; await saveLinks(); renderAddon(); };
+$('importAddonOnce').onclick = () => $('addonFile').click();
+$('addonFile').onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try { const n = importAddonText(await file.text()); if (!n) toast('No new events in that file.'); }
+  catch (err) { alert('That doesn\'t look like a ForeverPushups.lua file. ' + err.message); }
+  e.target.value = '';
+};
+// Moving a character to another player also moves the entries it already imported.
+$('charMap').onchange = e => {
+  const sel = e.target.closest('select[data-char]');
+  if (!sel) return;
+  const ch = sel.dataset.char, to = state.profiles.find(p => p.id === sel.value);
+  state.charMap[ch] = to.id;
+  for (const p of state.profiles) {
+    if (p === to) continue;
+    const moving = p.log.filter(x => x.char === ch);
+    if (!moving.length) continue;
+    p.log = p.log.filter(x => x.char !== ch);
+    to.log.push(...moving);
+  }
+  to.log.sort((a, b) => a.ts - b.ts);
+  render();
+};
+
 render();
+loadLinks();
 </script>
 </body>
 </html>
