@@ -12,6 +12,7 @@ local HIT_WINDOW = 20 -- seconds: how recent an attacker must be to blame it for
 local GOLD = "|cfff0c050"
 local GREY = "|cff9c8f78"
 local RED = "|cffff6060"
+local ICON = "Interface\\Icons\\Spell_Nature_Strength" -- the flexing arm
 local LABEL = { pve = "PvE Death", pvp = "PvP Death", fall = "Falling Death", flight = "Flight Point" }
 local SHORT = { pve = "PvE", pvp = "PvP", fall = "Fall", flight = "Flight" }
 local TYPES = { "pve", "pvp", "fall", "flight" }
@@ -542,6 +543,99 @@ local function doneRow(parent, i)
   return r
 end
 
+-- ---------------------------------------------------------------------------
+-- Minimap button (drag it around the edge of the minimap)
+-- ---------------------------------------------------------------------------
+local mmButton
+
+local function placeMinimapButton()
+  if not mmButton then return end
+  local angle = math.rad(db.ui.minimapAngle or 200)
+  local half = (Minimap:GetWidth() or 140) / 2
+  local radius = half + 5
+  local x, y = math.cos(angle), math.sin(angle)
+  if GetMinimapShape and GetMinimapShape() == "SQUARE" then
+    local m = math.max(math.abs(x), math.abs(y))
+    if m > 0 then x, y = x / m, y / m end
+    radius = half + 4
+  end
+  mmButton:ClearAllPoints()
+  mmButton:SetPoint("CENTER", Minimap, "CENTER", x * radius, y * radius)
+end
+
+local function toggleWindow() if W then W:SetShown(not W:IsShown()) end end
+
+local function buildMinimapButton()
+  if not Minimap then return end
+  local b = CreateFrame("Button", "ForeverPushupsMinimapButton", Minimap)
+  b:SetSize(31, 31)
+  b:SetFrameStrata("MEDIUM")
+  b:SetFrameLevel((Minimap:GetFrameLevel() or 0) + 8)
+  b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+  b:RegisterForDrag("LeftButton")
+
+  local bg = b:CreateTexture(nil, "BACKGROUND")
+  bg:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
+  bg:SetSize(20, 20)
+  bg:SetPoint("CENTER")
+  local icon = b:CreateTexture(nil, "ARTWORK")
+  icon:SetTexture(ICON)
+  icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+  icon:SetSize(19, 19)
+  icon:SetPoint("CENTER")
+  local border = b:CreateTexture(nil, "OVERLAY")
+  border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+  border:SetSize(53, 53)
+  border:SetPoint("TOPLEFT")
+  local hl = b:CreateTexture(nil, "HIGHLIGHT")
+  hl:SetTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+  hl:SetBlendMode("ADD")
+  hl:SetSize(31, 31)
+  hl:SetPoint("CENTER")
+
+  b:SetScript("OnClick", function(_, mouse)
+    if mouse == "RightButton" then
+      db.ui.hideBar = not db.ui.hideBar
+      Refresh()
+    else
+      toggleWindow()
+    end
+  end)
+  b:SetScript("OnDragStart", function(self)
+    self:SetScript("OnUpdate", function()
+      local mx, my = Minimap:GetCenter()
+      local scale = Minimap:GetEffectiveScale()
+      local cx, cy = GetCursorPosition()
+      local a = math.deg((math.atan2 or atan2)(cy / scale - my, cx / scale - mx))
+      db.ui.minimapAngle = a < 0 and a + 360 or a
+      placeMinimapButton()
+    end)
+  end)
+  b:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+  b:SetScript("OnEnter", function(self)
+    local owed = 0
+    for _, e in ipairs(db.log) do if not e.done then owed = owed + e.reps end end
+    GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+    GameTooltip:AddLine("Forever Pushups", 0.94, 0.75, 0.31)
+    GameTooltip:AddLine(owed > 0 and string.format("Owed: %d %s", owed, base().name:lower()) or "All caught up!", 1, 1, 1)
+    GameTooltip:AddLine("Left-click: open / close", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("Right-click: show / hide the owed bar", 0.8, 0.8, 0.8)
+    GameTooltip:AddLine("Drag: move around the minimap", 0.6, 0.6, 0.6)
+    GameTooltip:Show()
+  end)
+  b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+  mmButton = b
+  placeMinimapButton()
+
+  -- also list it in the minimap's addon menu, where the client has one
+  if type(AddonCompartmentFrame) == "table" and type(AddonCompartmentFrame.RegisterAddon) == "function" then
+    pcall(AddonCompartmentFrame.RegisterAddon, AddonCompartmentFrame, {
+      text = "Forever Pushups", icon = ICON, notCheckable = true, func = toggleWindow,
+    })
+  end
+end
+
 local function selectTab(name)
   currentTab = name
   for k, p in pairs(panels) do p:SetShown(k == name) end
@@ -652,6 +746,8 @@ local function buildSettings(pt)
   h3:SetText("Display")
   pt.barBtn = button(c, 180, 22, "", function() db.ui.hideBar = not db.ui.hideBar; Refresh() end)
   pt.barBtn:SetPoint("TOPLEFT", 6, line(30))
+  pt.mmBtn = button(c, 180, 22, "", function() db.ui.hideMinimap = not db.ui.hideMinimap; Refresh() end)
+  pt.mmBtn:SetPoint("TOPLEFT", 6, line(30))
 
   c:SetHeight(-y + 10)
 end
@@ -767,7 +863,15 @@ local function buildUI()
   bar.text = text(bar, "GameFontNormal", "CENTER")
   bar.text:SetPoint("CENTER")
   loadPos(bar, "bar", { "TOP", UIParent, "TOP", 0, -120 })
+  bar.icon = bar:CreateTexture(nil, "ARTWORK")
+  bar.icon:SetTexture(ICON)
+  bar.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+  bar.icon:SetSize(18, 18)
+  bar.icon:SetPoint("LEFT", 6, 0)
+  bar.text:ClearAllPoints()
+  bar.text:SetPoint("CENTER", 10, 0)
 
+  buildMinimapButton()
   buildEditor()
 
   W:SetScript("OnShow", function() Refresh() end)
@@ -783,6 +887,7 @@ Refresh = function()
 
   bar.text:SetText(owed > 0 and string.format("%s owed: %s%d|r", base().name, RED, owed) or (base().name .. ": all caught up"))
   bar:SetShown(not db.ui.hideBar)
+  if mmButton then mmButton:SetShown(not db.ui.hideMinimap) end
   if editor and editor:IsShown() and editor.entry then editor:Update() end
   if not W:IsShown() then return end
 
@@ -894,6 +999,7 @@ Refresh = function()
     p.resetEx.armed = false
     p.resetEx:SetText("Reset to defaults")
     p.barBtn:SetText(db.ui.hideBar and "Show the owed bar" or "Hide the owed bar")
+    p.mmBtn:SetText(db.ui.hideMinimap and "Show the minimap button" or "Hide the minimap button")
   end
 end
 
@@ -974,6 +1080,9 @@ SlashCmdList.FOREVERPUSHUPS = function(msg)
   elseif msg == "bar" then
     db.ui.hideBar = not db.ui.hideBar
     Refresh()
+  elseif msg == "minimap" then
+    db.ui.hideMinimap = not db.ui.hideMinimap
+    Refresh()
   elseif msg == "reset" then
     db.ui.window, db.ui.bar = nil, nil
     loadPos(W, "window", { "CENTER", UIParent, "CENTER", 0, 0 })
@@ -982,6 +1091,7 @@ SlashCmdList.FOREVERPUSHUPS = function(msg)
   elseif msg == "help" then
     say("/pushups - open or close the window")
     say("/pushups bar - show or hide the small owed bar")
+    say("/pushups minimap - show or hide the minimap button")
     say("/pushups reset - move the window and bar back on screen")
     say("/pushups test - log a fake PvE death")
   else
