@@ -1,28 +1,27 @@
 -- Forever Pushups
--- Detects deaths, falling deaths and flights, and keeps your pushup tally right inside WoW.
--- /pushups opens the window. Squats and situps count x2, jumping jacks x3.
+-- Detects deaths, falling deaths and flights, and keeps your exercise tally right inside WoW.
+-- /pushups opens the window. Exercises, multipliers and reps per event are editable in Settings,
+-- and every entry can be edited or deleted.
 -- (Events are also kept in ForeverPushupsDB.events so the website can still import them.)
 
 local ADDON_NAME = ...
 local MAX_EVENTS = 1000
+local MAX_EXERCISES = 4
 local HIT_WINDOW = 20 -- seconds: how recent an attacker must be to blame it for a death
 
 local GOLD = "|cfff0c050"
 local GREY = "|cff9c8f78"
+local RED = "|cffff6060"
 local LABEL = { pve = "PvE Death", pvp = "PvP Death", fall = "Falling Death", flight = "Flight Point" }
 local SHORT = { pve = "PvE", pvp = "PvP", fall = "Fall", flight = "Flight" }
 local TYPES = { "pve", "pvp", "fall", "flight" }
 local DEFAULT_REPS = { pve = 10, pvp = 5, fall = 30, flight = 5 }
-
--- Every event owes pushups; it can be paid off in any of these. mult = reps per pushup owed.
-local EX = {
-  { name = "Pushups",       mult = 1, short = "Push" },
-  { name = "Squats",        mult = 2, short = "Squat" },
-  { name = "Situps",        mult = 2, short = "Situp" },
-  { name = "Jumping Jacks", mult = 3, short = "Jacks" },
+local DEFAULT_EXERCISES = {
+  { id = "pushups", name = "Pushups",       mult = 1 },
+  { id = "squats",  name = "Squats",        mult = 2 },
+  { id = "situps",  name = "Situps",        mult = 2 },
+  { id = "jacks",   name = "Jumping Jacks", mult = 3 },
 }
-local MULT = {}
-for _, x in ipairs(EX) do MULT[x.name] = x.mult end
 
 local db
 local Refresh = function() end -- set once the UI exists
@@ -45,13 +44,40 @@ local function realmName()
   return (r:gsub("[%s%-']", ""))
 end
 
+local function round(n) return math.floor(n + 0.5) end
 local function repsFor(kind) return (db.reps and db.reps[kind]) or DEFAULT_REPS[kind] or 10 end
 
 -- ---------------------------------------------------------------------------
--- Data
+-- Exercises (db.exercises). The first one is the unit everything is counted in.
+-- ---------------------------------------------------------------------------
+local function exercises() return db.exercises end
+local function base() return db.exercises[1] end
+local function exById(id)
+  for _, x in ipairs(db.exercises) do if x.id == id then return x end end
+end
+-- Label for small buttons: "Jumping Jacks" -> "Jacks", "Pushups" -> "Pushups"
+local function shortName(x)
+  local last = x.name:match("(%S+)%s*$") or x.name
+  return #last > 8 and last:sub(1, 8) or last
+end
+local function multText(m)
+  return (m == math.floor(m)) and tostring(m) or string.format("%.1f", m)
+end
+-- "or 20 squats, 20 situps, 30 jumping jacks"
+local function altText(reps)
+  local parts = {}
+  for i = 2, #db.exercises do
+    local x = db.exercises[i]
+    parts[#parts + 1] = string.format("%d %s", round(reps * x.mult), x.name:lower())
+  end
+  return #parts > 0 and ("or " .. table.concat(parts, ", ")) or ""
+end
+
+-- ---------------------------------------------------------------------------
+-- Entries (db.log)
 -- ---------------------------------------------------------------------------
 local counter = 0
-local function newEntry(kind, info)
+local function newEvent(kind, info)
   counter = counter + 1
   local e = {
     id = string.format("%s-%s-%d-%d-%d", UnitName("player") or "?", realmName(), time(), counter, math.random(1000, 9999)),
@@ -65,7 +91,7 @@ end
 
 local function record(kind, info)
   if not db then return end
-  local e = newEntry(kind, info)
+  local e = newEvent(kind, info)
   -- raw copy for the website
   table.insert(db.events, e)
   while #db.events > MAX_EVENTS do table.remove(db.events, 1) end
@@ -75,62 +101,75 @@ local function record(kind, info)
   table.insert(db.log, entry)
 
   local detail = e.killer or e.dest
-  say(string.format("%s%s|r%s: +%d pushups (or %d squats). %s/pushups|r to open.",
-    GOLD, LABEL[kind] or kind, detail and (" (" .. detail .. ")") or "", entry.reps, entry.reps * 2, GOLD))
+  local alt = db.exercises[2]
+  say(string.format("%s%s|r%s: +%d %s%s. %s/pushups|r to open.",
+    GOLD, LABEL[kind] or kind, detail and (" (" .. detail .. ")") or "", entry.reps, base().name:lower(),
+    alt and string.format(" (or %d %s)", round(entry.reps * alt.mult), alt.name:lower()) or "", GOLD))
   if UIErrorsFrame then UIErrorsFrame:AddMessage("Forever Pushups: " .. (LABEL[kind] or kind) .. " +" .. entry.reps, 0.94, 0.75, 0.31) end
   Refresh()
   return entry
 end
 
-local function doneReps(entry) return entry.reps * (MULT[entry.doneAs] or 1) end
+-- Done entries keep a snapshot (doneName, doneReps) so later renames/multiplier changes don't rewrite history.
+local function setDone(entry, x, when)
+  entry.done, entry.doneAs, entry.doneName = true, x.id, x.name
+  entry.doneReps = round(entry.reps * x.mult)
+  entry.doneT = when or entry.doneT or time()
+end
+local function setOwed(entry)
+  entry.done, entry.doneAs, entry.doneName, entry.doneReps, entry.doneT = nil, nil, nil, nil, nil
+end
+local function doneName(entry)
+  local x = exById(entry.doneAs)
+  return x and x.name or entry.doneName or "?"
+end
 
 local function totals()
   local owed, score, owedN = 0, 0, 0
-  local by = {}
-  for _, x in ipairs(EX) do by[x.name] = 0 end
+  local by, other = {}, {}
   for _, e in ipairs(db.log) do
     if e.done then
       score = score + e.reps
-      by[e.doneAs] = (by[e.doneAs] or 0) + doneReps(e)
+      if exById(e.doneAs) then
+        by[e.doneAs] = (by[e.doneAs] or 0) + (e.doneReps or e.reps)
+      else -- done as an exercise that has since been removed
+        local n = e.doneName or "?"
+        other[n] = (other[n] or 0) + (e.doneReps or e.reps)
+      end
     else
       owed = owed + e.reps
       owedN = owedN + 1
     end
   end
-  return owed, owedN, score, by
+  return owed, owedN, score, by, other
 end
 
-local function complete(entry, exName)
-  entry.done, entry.doneAs, entry.doneT = true, exName, time()
-  Refresh()
-end
-local function undo(entry)
-  entry.done, entry.doneAs, entry.doneT = nil, nil, nil
-  Refresh()
-end
+local function complete(entry, x) setDone(entry, x, time()); Refresh() end
+local function undo(entry) setOwed(entry); Refresh() end
 local function delete(entry)
   for i, e in ipairs(db.log) do if e == entry then table.remove(db.log, i) break end end
   Refresh()
 end
-local function completeAll(exName)
+local function completeAll(x)
   local now = time()
-  for _, e in ipairs(db.log) do if not e.done then e.done, e.doneAs, e.doneT = true, exName, now end end
+  for _, e in ipairs(db.log) do if not e.done then setDone(e, x, now) end end
   Refresh()
 end
 
 -- "Menethil Harbor, Wetlands" -> "Wetlands"
 local function destZone(dest)
-  if not dest then return nil end
+  if not dest or dest == "" then return nil end
   return dest:match(",%s*([^,]+)$") or dest
 end
 local function flightZone(e)
   if e.landed and e.zone and e.zone ~= "" then return e.zone end
-  return destZone(e.dest) or (e.zone ~= "" and e.zone) or "Unknown"
+  return destZone(e.dest) or (e.zone and e.zone ~= "" and e.zone) or "Unknown"
 end
 
+local function detailOf(e) return e.type == "flight" and e.dest or e.killer end
 local function entryTitle(e)
-  local what = e.killer or e.dest
-  return (LABEL[e.type] or e.type) .. (what and (GREY .. " – |r" .. what) or "")
+  local what = detailOf(e)
+  return (LABEL[e.type] or e.type) .. ((what and what ~= "") and (GREY .. " – |r" .. what) or "")
 end
 local function entryWhere(e)
   local place = e.type == "flight" and flightZone(e) or e.zone or ""
@@ -236,9 +275,9 @@ local function watchLanding()
 end
 
 -- ---------------------------------------------------------------------------
--- UI
+-- UI helpers
 -- ---------------------------------------------------------------------------
-local W, bar
+local W, bar, editor
 local PAD, CONTENT_W = 14, 412
 local currentTab = "owed"
 local tabs, panels = {}, {}
@@ -250,10 +289,10 @@ local function backdrop(f, alpha)
   f:SetBackdropBorderColor(0.66, 0.52, 0.18, 1)
 end
 
-local function button(parent, w, h, text, onClick)
+local function button(parent, w, h, label, onClick)
   local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
   b:SetSize(w, h)
-  b:SetText(text)
+  b:SetText(label)
   b:SetScript("OnClick", onClick)
   return b
 end
@@ -262,6 +301,29 @@ local function text(parent, font, justify)
   local fs = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlight")
   fs:SetJustifyH(justify or "LEFT")
   return fs
+end
+
+-- Text box. onCommit(box, text) runs on Enter or when it loses focus; Escape restores via getValue.
+local function input(parent, w, numeric, getValue, onCommit)
+  local e = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+  e:SetSize(w, 20)
+  e:SetAutoFocus(false)
+  e:SetMaxLetters(numeric and 5 or 40)
+  local committing = false
+  local function commit(box)
+    if committing then return end
+    committing = true
+    if onCommit then onCommit(box, box:GetText()) end
+    box:ClearFocus()
+    committing = false
+  end
+  e:SetScript("OnEnterPressed", commit)
+  e:SetScript("OnEditFocusLost", commit)
+  e:SetScript("OnEscapePressed", function(box)
+    if getValue then box:SetText(getValue() or "") end
+    committing = true; box:ClearFocus(); committing = false
+  end)
+  return e
 end
 
 local function savePos(f, key)
@@ -292,8 +354,143 @@ local function divider(row)
   t:SetHeight(1)
 end
 
--- Owed rows: title, where/when, then one button per exercise + delete
+-- ---------------------------------------------------------------------------
+-- Entry editor
+-- ---------------------------------------------------------------------------
+local function openEditor(entry)
+  local E = editor
+  E.entry = entry
+  E.type = entry.type
+  E.status = entry.done and (exById(entry.doneAs) and entry.doneAs or "keep") or "owed"
+  E.typeBtn:SetText(LABEL[E.type])
+  E.detail:SetText(detailOf(entry) or "")
+  E.zone:SetText(entry.type == "flight" and flightZone(entry) or (entry.zone or ""))
+  E.reps:SetText(tostring(entry.reps))
+  E.delBtn.armed = false
+  E.delBtn:SetText("Delete")
+  E:Update()
+  E:Show()
+end
+
+local function buildEditor()
+  local E = CreateFrame("Frame", "ForeverPushupsEditor", UIParent, "BackdropTemplate")
+  E:SetSize(340, 250)
+  E:SetFrameStrata("DIALOG")
+  E:SetPoint("CENTER")
+  E:SetClampedToScreen(true)
+  E:SetMovable(true)
+  E:EnableMouse(true)
+  E:RegisterForDrag("LeftButton")
+  E:SetScript("OnDragStart", E.StartMoving)
+  E:SetScript("OnDragStop", E.StopMovingOrSizing)
+  backdrop(E, 0.98)
+  E:Hide()
+  tinsert(UISpecialFrames, "ForeverPushupsEditor")
+
+  local title = text(E, "GameFontNormalLarge")
+  title:SetPoint("TOPLEFT", 14, -12)
+  title:SetText("Edit entry")
+
+  local function label(y, s)
+    local l = text(E, "GameFontHighlight")
+    l:SetPoint("TOPLEFT", 16, y)
+    l:SetText(s)
+    return l
+  end
+
+  label(-44, "Event")
+  E.typeBtn = button(E, 150, 22, "", function()
+    for i, k in ipairs(TYPES) do
+      if k == E.type then E.type = TYPES[i % #TYPES + 1] break end
+    end
+    E.typeBtn:SetText(LABEL[E.type])
+    E:Update()
+  end)
+  E.typeBtn:SetPoint("TOPLEFT", 120, -40)
+
+  E.detailLabel = label(-74, "Killed by")
+  E.detail = input(E, 190, false)
+  E.detail:SetPoint("TOPLEFT", 126, -70)
+
+  label(-104, "Zone")
+  E.zone = input(E, 190, false)
+  E.zone:SetPoint("TOPLEFT", 126, -100)
+
+  E.repsLabel = label(-134, "Owed")
+  E.reps = input(E, 50, true, nil, function() E:Update() end)
+  E.reps:SetPoint("TOPLEFT", 126, -130)
+
+  label(-164, "Status")
+  E.statusBtn = button(E, 190, 22, "", function()
+    -- cycle: owed -> done as each exercise -> owed
+    local order = { "owed" }
+    for _, x in ipairs(exercises()) do order[#order + 1] = x.id end
+    if E.status == "keep" then order[#order + 1] = "keep" end
+    for i, s in ipairs(order) do
+      if s == E.status then E.status = order[i % #order + 1] break end
+    end
+    E:Update()
+  end)
+  E.statusBtn:SetPoint("TOPLEFT", 120, -160)
+
+  E.save = button(E, 90, 22, "Save", function()
+    local e = E.entry
+    local wasType = e.type
+    e.type = E.type
+    local d = E.detail:GetText():match("^%s*(.-)%s*$")
+    if e.type == "flight" then e.dest = d ~= "" and d or nil; e.killer = nil
+    else e.killer = d ~= "" and d or nil; if wasType == "flight" then e.dest = nil end end
+    local z = E.zone:GetText():match("^%s*(.-)%s*$")
+    if z ~= "" then e.zone = z; if e.type == "flight" then e.landed = true end end
+    local n = tonumber(E.reps:GetText())
+    if n and n > 0 then e.reps = round(n) end
+    if E.status == "owed" then
+      setOwed(e)
+    elseif E.status ~= "keep" and exById(E.status) then
+      setDone(e, exById(E.status))
+    end -- "keep": done as an exercise that was removed, left as it was
+    E:Hide()
+    Refresh()
+  end)
+  E.save:SetPoint("BOTTOMLEFT", 14, 14)
+
+  E.delBtn = button(E, 120, 22, "Delete", function(b)
+    if not b.armed then b.armed = true; b:SetText("Click to confirm") return end
+    delete(E.entry)
+    E:Hide()
+  end)
+  E.delBtn:SetPoint("BOTTOM", 0, 14)
+
+  local cancel = button(E, 90, 22, "Cancel", function() E:Hide() end)
+  cancel:SetPoint("BOTTOMRIGHT", -14, 14)
+
+  function E:Update()
+    -- the exercise picked here may have just been removed in Settings
+    if E.status ~= "owed" and E.status ~= "keep" and not exById(E.status) then
+      E.status = (E.entry.done and not exById(E.entry.doneAs)) and "keep" or "owed"
+    end
+    E.detailLabel:SetText(E.type == "flight" and "Flew to" or "Killed by")
+    local reps = tonumber(E.reps:GetText()) or E.entry.reps
+    E.repsLabel:SetText("Owed (" .. base().name:lower() .. ")")
+    if E.status == "owed" then
+      E.statusBtn:SetText("Still owed")
+    elseif E.status == "keep" then
+      E.statusBtn:SetText(string.format("Done: %d %s", E.entry.doneReps or reps, (E.entry.doneName or "?"):lower()))
+    else
+      local x = exById(E.status)
+      E.statusBtn:SetText(string.format("Done: %d %s", round(reps * x.mult), x.name:lower()))
+    end
+  end
+
+  editor = E
+end
+
+-- ---------------------------------------------------------------------------
+-- Main window
+-- ---------------------------------------------------------------------------
 local owedRows, doneRows = {}, {}
+local EXB_W = 76 -- width of each "10 Pushups" button
+
 local function owedRow(parent, i)
   local r = owedRows[i]
   if r then return r end
@@ -306,13 +503,18 @@ local function owedRow(parent, i)
   r.where = text(r, "GameFontDisableSmall", "RIGHT")
   r.where:SetPoint("TOPRIGHT", -4, -6)
   r.btns = {}
-  for j, x in ipairs(EX) do
-    local b = button(r, 84, 20, "", function() if r.entry then complete(r.entry, x.name) end end)
-    b:SetPoint("BOTTOMLEFT", 2 + (j - 1) * 87, 4)
+  for j = 1, MAX_EXERCISES do
+    local b = button(r, EXB_W, 20, "", function()
+      local x = exercises()[j]
+      if r.entry and x then complete(r.entry, x) end
+    end)
+    b:SetPoint("BOTTOMLEFT", 2 + (j - 1) * (EXB_W + 3), 4)
     r.btns[j] = b
   end
   local del = button(r, 24, 20, "X", function() if r.entry then delete(r.entry) end end)
   del:SetPoint("BOTTOMRIGHT", -2, 4)
+  local edit = button(r, 40, 20, "Edit", function() if r.entry then openEditor(r.entry) end end)
+  edit:SetPoint("RIGHT", del, "LEFT", -3, 0)
   divider(r)
   owedRows[i] = r
   return r
@@ -325,14 +527,16 @@ local function doneRow(parent, i)
   r:SetSize(CONTENT_W, 38)
   r.title = text(r, "GameFontHighlight")
   r.title:SetPoint("TOPLEFT", 4, -4)
-  r.title:SetWidth(CONTENT_W - 140)
+  r.title:SetWidth(CONTENT_W - 170)
   r.title:SetWordWrap(false)
   r.amt = text(r, "GameFontNormal", "RIGHT")
-  r.amt:SetPoint("TOPRIGHT", -60, -4)
+  r.amt:SetPoint("TOPRIGHT", -98, -4)
   r.where = text(r, "GameFontDisableSmall")
   r.where:SetPoint("BOTTOMLEFT", 4, 5)
-  local u = button(r, 52, 20, "Undo", function() if r.entry then undo(r.entry) end end)
+  local u = button(r, 50, 20, "Undo", function() if r.entry then undo(r.entry) end end)
   u:SetPoint("RIGHT", -2, 0)
+  local edit = button(r, 40, 20, "Edit", function() if r.entry then openEditor(r.entry) end end)
+  edit:SetPoint("RIGHT", u, "LEFT", -3, 0)
   divider(r)
   doneRows[i] = r
   return r
@@ -345,9 +549,116 @@ local function selectTab(name)
   Refresh()
 end
 
+-- Settings: rebuilt from db each time the tab is shown
+local function buildSettings(pt)
+  pt.sf, pt.child = makeScroll(pt, 0)
+  local c = pt.child
+  local y = -4
+  local function line(h) local cur = y; y = y - h; return cur end
+
+  local h1 = text(c, "GameFontNormal")
+  h1:SetPoint("TOPLEFT", 2, line(24))
+  pt.repsHeader = h1
+
+  pt.repInputs = {}
+  for _, kind in ipairs(TYPES) do
+    local yy = line(28)
+    local l = text(c, "GameFontHighlight")
+    l:SetPoint("TOPLEFT", 6, yy - 4)
+    l:SetText(LABEL[kind])
+    local e = input(c, 50, true, function() return tostring(repsFor(kind)) end, function(box, s)
+      local n = tonumber(s)
+      if n and n > 0 then db.reps[kind] = round(n) end
+      box:SetText(tostring(repsFor(kind)))
+      Refresh()
+    end)
+    e:SetPoint("TOPLEFT", 150, yy)
+    pt.repInputs[kind] = e
+  end
+  local n1 = text(c, "GameFontDisableSmall")
+  n1:SetPoint("TOPLEFT", 6, line(26) - 2)
+  n1:SetText("New amounts apply to new events. Use Edit on an entry to change an old one.")
+  n1:SetWidth(CONTENT_W - 10)
+
+  local h2 = text(c, "GameFontNormal")
+  h2:SetPoint("TOPLEFT", 2, line(22))
+  h2:SetText("Exercises")
+  local n2 = text(c, "GameFontDisableSmall")
+  n2:SetPoint("TOPLEFT", 6, line(30))
+  n2:SetWidth(CONTENT_W - 10)
+  n2:SetText("The first one is the unit everything is counted in. The number is how many reps equal one of it (squats x2 = 2 squats per pushup).")
+
+  local hdrName = text(c, "GameFontDisableSmall")
+  hdrName:SetPoint("TOPLEFT", 12, line(16))
+  hdrName:SetText("Name")
+  local hdrMult = text(c, "GameFontDisableSmall")
+  hdrMult:SetPoint("LEFT", hdrName, "LEFT", 196, 0)
+  hdrMult:SetText("Reps per 1")
+
+  pt.exRows = {}
+  for i = 1, MAX_EXERCISES do
+    local yy = line(28)
+    local row = {}
+    row.name = input(c, 180, false, function() local x = exercises()[i]; return x and x.name end, function(box, s)
+      local x = exercises()[i]
+      s = s:match("^%s*(.-)%s*$")
+      if x and s ~= "" then x.name = s end
+      Refresh()
+    end)
+    row.name:SetPoint("TOPLEFT", 12, yy)
+    row.x = text(c, "GameFontHighlight")
+    row.x:SetPoint("TOPLEFT", 200, yy - 4)
+    row.x:SetText("x")
+    row.mult = input(c, 44, false, function() local x = exercises()[i]; return x and multText(x.mult) end, function(box, s)
+      local x = exercises()[i]
+      local n = tonumber(s)
+      if x and i > 1 and n and n > 0 and n <= 100 then x.mult = n end
+      Refresh()
+    end)
+    row.mult:SetPoint("TOPLEFT", 214, yy)
+    row.baseLabel = text(c, "GameFontDisableSmall")
+    row.baseLabel:SetPoint("TOPLEFT", 214, yy - 5)
+    row.baseLabel:SetText("1 (base unit)")
+    row.remove = button(c, 70, 20, "Remove", function()
+      if i > 1 and exercises()[i] then table.remove(db.exercises, i) end
+      Refresh()
+    end)
+    row.remove:SetPoint("TOPLEFT", 274, yy)
+    pt.exRows[i] = row
+  end
+  pt.addEx = button(c, 130, 22, "Add exercise", function()
+    if #db.exercises < MAX_EXERCISES then
+      table.insert(db.exercises, { id = "ex" .. time() .. math.random(100, 999), name = "New exercise", mult = 1 })
+    end
+    Refresh()
+  end)
+  pt.addEx:SetPoint("TOPLEFT", 10, line(30))
+  pt.resetEx = button(c, 150, 22, "Reset to defaults", function(b)
+    if not b.armed then b.armed = true; b:SetText("Click to confirm") return end
+    b.armed = false
+    db.exercises = CopyTable and CopyTable(DEFAULT_EXERCISES) or {
+      { id = "pushups", name = "Pushups", mult = 1 }, { id = "squats", name = "Squats", mult = 2 },
+      { id = "situps", name = "Situps", mult = 2 }, { id = "jacks", name = "Jumping Jacks", mult = 3 } }
+    Refresh()
+  end)
+  pt.resetEx:SetPoint("LEFT", pt.addEx, "RIGHT", 8, 0)
+  local n3 = text(c, "GameFontDisableSmall")
+  n3:SetPoint("TOPLEFT", 6, line(30) - 2)
+  n3:SetWidth(CONTENT_W - 10)
+  n3:SetText("Changes don't rewrite reps you already marked done; use Edit on an entry for that.")
+
+  local h3 = text(c, "GameFontNormal")
+  h3:SetPoint("TOPLEFT", 2, line(26))
+  h3:SetText("Display")
+  pt.barBtn = button(c, 180, 22, "", function() db.ui.hideBar = not db.ui.hideBar; Refresh() end)
+  pt.barBtn:SetPoint("TOPLEFT", 6, line(30))
+
+  c:SetHeight(-y + 10)
+end
+
 local function buildUI()
   W = CreateFrame("Frame", "ForeverPushupsFrame", UIParent, "BackdropTemplate")
-  W:SetSize(470, 540)
+  W:SetSize(470, 560)
   W:SetFrameStrata("HIGH")
   W:SetClampedToScreen(true)
   W:SetMovable(true)
@@ -371,6 +682,8 @@ local function buildUI()
   W.owed:SetPoint("TOPLEFT", PAD, -40)
   W.owedSub = text(W, "GameFontDisableSmall")
   W.owedSub:SetPoint("TOPLEFT", PAD, -60)
+  W.owedSub:SetWidth(470 - PAD * 2)
+  W.owedSub:SetWordWrap(false)
   W.done = text(W, "GameFontHighlightSmall")
   W.done:SetPoint("TOPLEFT", PAD, -78)
   W.done:SetWidth(470 - PAD * 2)
@@ -408,8 +721,8 @@ local function buildUI()
   allLabel:SetPoint("TOPLEFT", 2, -4)
   allLabel:SetText("All done as:")
   po.all = {}
-  for j, x in ipairs(EX) do
-    local b = button(po, 76, 20, x.short, function() completeAll(x.name) end)
+  for j = 1, MAX_EXERCISES do
+    local b = button(po, 76, 20, "", function() local x = exercises()[j]; if x then completeAll(x) end end)
     b:SetPoint("TOPLEFT", 74 + (j - 1) * 80, 0)
     po.all[j] = b
   end
@@ -424,7 +737,7 @@ local function buildUI()
   pd.sf, pd.child = makeScroll(pd, 0)
   pd.empty = text(pd.child, "GameFontDisable")
   pd.empty:SetPoint("TOPLEFT", 4, -8)
-  pd.empty:SetText("No reps completed yet.")
+  pd.empty:SetText("Nothing completed yet.")
   panels.done = pd
 
   -- Stats
@@ -438,46 +751,12 @@ local function buildUI()
 
   -- Settings
   local pt = panel()
-  local hdr = text(pt, "GameFontNormal")
-  hdr:SetPoint("TOPLEFT", 2, -4)
-  hdr:SetText("Pushups per event")
-  pt.inputs = {}
-  for i, kind in ipairs(TYPES) do
-    local l = text(pt, "GameFontHighlight")
-    l:SetPoint("TOPLEFT", 6, -10 - i * 28)
-    l:SetText(LABEL[kind])
-    local e = CreateFrame("EditBox", nil, pt, "InputBoxTemplate")
-    e:SetSize(50, 20)
-    e:SetPoint("TOPLEFT", 150, -6 - i * 28)
-    e:SetAutoFocus(false)
-    e:SetNumeric(true)
-    e:SetMaxLetters(3)
-    local function apply(box)
-      local n = tonumber(box:GetText())
-      if n and n > 0 then db.reps[kind] = n end
-      box:SetText(tostring(repsFor(kind)))
-      box:ClearFocus()
-      Refresh()
-    end
-    e:SetScript("OnEnterPressed", apply)
-    e:SetScript("OnEditFocusLost", apply)
-    e:SetScript("OnEscapePressed", function(box) box:SetText(tostring(repsFor(kind))); box:ClearFocus() end)
-    pt.inputs[kind] = e
-  end
-  local note = text(pt, "GameFontDisableSmall")
-  note:SetPoint("TOPLEFT", 6, -10 - 5 * 28)
-  note:SetWidth(CONTENT_W)
-  note:SetText("Squats and situps count x2, jumping jacks x3. New amounts apply to new events.")
-  pt.barBtn = button(pt, 180, 22, "", function()
-    db.ui.hideBar = not db.ui.hideBar
-    Refresh()
-  end)
-  pt.barBtn:SetPoint("TOPLEFT", 4, -10 - 6 * 28 - 10)
+  buildSettings(pt)
   panels.settings = pt
 
   -- small movable "Owed: N" bar; click to open the window
   bar = CreateFrame("Button", "ForeverPushupsBar", UIParent, "BackdropTemplate")
-  bar:SetSize(150, 26)
+  bar:SetSize(170, 26)
   backdrop(bar, 0.85)
   bar:SetClampedToScreen(true)
   bar:SetMovable(true)
@@ -489,28 +768,39 @@ local function buildUI()
   bar.text:SetPoint("CENTER")
   loadPos(bar, "bar", { "TOP", UIParent, "TOP", 0, -120 })
 
+  buildEditor()
+
   W:SetScript("OnShow", function() Refresh() end)
+  W:SetScript("OnHide", function() if editor then editor:Hide() end end)
   selectTab("owed")
 end
 
 Refresh = function()
   if not W then return end
-  local owed, owedN, score, by = totals()
+  local owed, owedN, score, by, other = totals()
+  local exs = exercises()
+  local unit = base().name:lower()
 
-  bar.text:SetText(owed > 0 and string.format("Pushups owed: %s%d|r", "|cffff6060", owed) or "Pushups: all caught up")
+  bar.text:SetText(owed > 0 and string.format("%s owed: %s%d|r", base().name, RED, owed) or (base().name .. ": all caught up"))
   bar:SetShown(not db.ui.hideBar)
+  if editor and editor:IsShown() and editor.entry then editor:Update() end
   if not W:IsShown() then return end
 
-  W.owed:SetText(owed > 0 and string.format("Owed: |cffff6060%d|r pushups", owed) or "All caught up!")
-  W.owedSub:SetText(owed > 0 and string.format("or %d squats / situps, or %d jumping jacks", owed * 2, owed * 3) or " ")
+  W.owed:SetText(owed > 0 and string.format("Owed: %s%d|r %s", RED, owed, unit) or "All caught up!")
+  W.owedSub:SetText(owed > 0 and altText(owed) or " ")
   local parts = {}
-  for _, x in ipairs(EX) do parts[#parts + 1] = string.format("%s%d|r %s", GOLD, by[x.name] or 0, x.short:lower()) end
+  for _, x in ipairs(exs) do parts[#parts + 1] = string.format("%s%d|r %s", GOLD, by[x.id] or 0, shortName(x):lower()) end
   W.done:SetText("Done: " .. table.concat(parts, " · ") .. string.format("   Score: %s%d|r", GOLD, score))
   for _, kind in ipairs(TYPES) do W.add[kind]:SetText(string.format("%s +%d", SHORT[kind], repsFor(kind))) end
   tabs.owed:SetText(string.format("Owed (%d)", owedN))
 
   if currentTab == "owed" then
     local p = panels.owed
+    for j, b in ipairs(p.all) do
+      local x = exs[j]
+      b:SetShown(x ~= nil)
+      if x then b:SetText(shortName(x)); b:SetEnabled(owedN > 0) end
+    end
     local n = 0
     for i = #db.log, 1, -1 do
       local e = db.log[i]
@@ -522,13 +812,16 @@ Refresh = function()
         r:SetPoint("TOPLEFT", 0, -(n - 1) * 48)
         r.title:SetText(entryTitle(e))
         r.where:SetText(entryWhere(e))
-        for j, x in ipairs(EX) do r.btns[j]:SetText(string.format("%d %s", e.reps * x.mult, x.short)) end
+        for j, b in ipairs(r.btns) do
+          local x = exs[j]
+          b:SetShown(x ~= nil)
+          if x then b:SetText(string.format("%d %s", round(e.reps * x.mult), shortName(x))) end
+        end
         r:Show()
       end
     end
     for i = n + 1, #owedRows do owedRows[i]:Hide(); owedRows[i].entry = nil end
     p.empty:SetShown(n == 0)
-    for _, b in ipairs(p.all) do b:SetEnabled(n > 0) end
     p.child:SetHeight(math.max(1, n * 48))
 
   elseif currentTab == "done" then
@@ -544,7 +837,7 @@ Refresh = function()
       r:ClearAllPoints()
       r:SetPoint("TOPLEFT", 0, -(i - 1) * 38)
       r.title:SetText(entryTitle(e))
-      r.amt:SetText(string.format("%d %s", doneReps(e), (e.doneAs or "pushups"):lower()))
+      r.amt:SetText(string.format("%d %s", e.doneReps or e.reps, doneName(e):lower()))
       r.where:SetText(entryWhere(e))
       r:Show()
     end
@@ -573,25 +866,50 @@ Refresh = function()
     for _, z in ipairs(zoneList) do lines[#lines + 1] = string.format("   %s: %s%d|r", z, GOLD, zones[z]) end
     lines[#lines + 1] = " "
     lines[#lines + 1] = GOLD .. "Done|r"
-    for _, x in ipairs(EX) do lines[#lines + 1] = string.format("   %s: %s%d|r", x.name, GOLD, by[x.name] or 0) end
-    lines[#lines + 1] = string.format("   Score (in pushups): %s%d|r", GOLD, score)
+    for _, x in ipairs(exs) do
+      lines[#lines + 1] = string.format("   %s: %s%d|r %s(x%s)|r", x.name, GOLD, by[x.id] or 0, GREY, multText(x.mult))
+    end
+    for name, v in pairs(other) do lines[#lines + 1] = string.format("   %s: %s%d|r %s(removed)|r", name, GOLD, v, GREY) end
+    lines[#lines + 1] = string.format("   Score (in %s): %s%d|r", unit, GOLD, score)
     p.body:SetText(table.concat(lines, "\n"))
     p.child:SetHeight(p.body:GetStringHeight() + 10)
 
   elseif currentTab == "settings" then
     local p = panels.settings
-    for kind, e in pairs(p.inputs) do if not e:HasFocus() then e:SetText(tostring(repsFor(kind))) end end
+    p.repsHeader:SetText(base().name .. " owed per event")
+    for kind, e in pairs(p.repInputs) do if not e:HasFocus() then e:SetText(tostring(repsFor(kind))) end end
+    for i, row in ipairs(p.exRows) do
+      local x = exs[i]
+      row.name:SetShown(x ~= nil)
+      row.x:SetShown(x ~= nil and i > 1)
+      row.mult:SetShown(x ~= nil and i > 1)
+      row.baseLabel:SetShown(x ~= nil and i == 1)
+      row.remove:SetShown(x ~= nil and i > 1)
+      if x then
+        if not row.name:HasFocus() then row.name:SetText(x.name) end
+        if not row.mult:HasFocus() then row.mult:SetText(multText(x.mult)) end
+      end
+    end
+    p.addEx:SetEnabled(#exs < MAX_EXERCISES)
+    p.resetEx.armed = false
+    p.resetEx:SetText("Reset to defaults")
     p.barBtn:SetText(db.ui.hideBar and "Show the owed bar" or "Hide the owed bar")
   end
 end
 
 -- ---------------------------------------------------------------------------
--- Setup
+-- Setup / saved data
 -- ---------------------------------------------------------------------------
+local NAME_TO_ID = { ["Pushups"] = "pushups", ["Squats"] = "squats", ["Situps"] = "situps", ["Jumping Jacks"] = "jacks" }
+
 local function migrate()
   db.events = db.events or {}
   db.reps = db.reps or {}
   db.ui = db.ui or {}
+  if not db.exercises or #db.exercises == 0 then
+    db.exercises = {}
+    for _, x in ipairs(DEFAULT_EXERCISES) do db.exercises[#db.exercises + 1] = { id = x.id, name = x.name, mult = x.mult } end
+  end
   if not db.log then
     -- first run of the in-game version: bring over earlier detected events (skip tests and doubled deaths)
     db.log = {}
@@ -605,7 +923,17 @@ local function migrate()
       last[e.type] = e.t
     end
   end
-  db.version = 2
+  -- v2 stored doneAs as the exercise's name; v3 uses ids plus a snapshot of what was done
+  for _, e in ipairs(db.log) do
+    if e.done and not e.doneReps then
+      local id = NAME_TO_ID[e.doneAs] or e.doneAs
+      local x = exById(id)
+      e.doneName = e.doneName or (x and x.name) or e.doneAs
+      e.doneAs = id
+      e.doneReps = round(e.reps * (x and x.mult or 1))
+    end
+  end
+  db.version = 3
 end
 
 local ticker, scanTicker = 0, 0
