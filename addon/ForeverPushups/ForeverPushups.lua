@@ -185,13 +185,27 @@ local FALL_RECENT = 2.0   -- death must come within this long after landing
 local DEATH_DEBOUNCE = 30 -- Forever fires PLAYER_DEAD twice per death; count it once
 local fallStart, lastLongFall, lastPvp, lastMob, lastDeathAt
 
+-- On WoW Forever, UnitName returns the surname where other clients return the realm:
+-- "Angy", "Skye" -> "Angy Skye". NPCs have no second value.
+local function fullName(unit)
+  local ok, first, surname = pcall(UnitName, unit)
+  if not ok or type(first) ~= "string" or first == "" then return nil end
+  if issecretvalue and issecretvalue(first) then return nil end
+  if type(surname) == "string" and surname ~= "" and not (issecretvalue and issecretvalue(surname))
+     and not first:find(" ", 1, true) then
+    local sep = Constants and Constants.CharacterNameSeparatorConsts
+      and Constants.CharacterNameSeparatorConsts.CHARACTERNAME_SURNAME_SEPARATOR or " "
+    return first .. sep .. surname
+  end
+  return first
+end
+
 local function attacker(unit)
   if not safe(UnitExists, unit) then return end
   if safe(UnitIsDead, unit) then return end
   if not safe(UnitCanAttack, "player", unit) then return end
   if not safe(UnitIsUnit, unit .. "target", "player") then return end
-  local name = safe(UnitName, unit)
-  if type(name) ~= "string" or name == "" then name = nil end
+  local name = fullName(unit)
   local pvp = safe(UnitIsPlayer, unit) or safe(UnitPlayerControlled, unit)
   return name, pvp
 end

@@ -2,7 +2,7 @@
 ## Title: Forever Pushups
 ## Notes: Logs your deaths, falling deaths and flights and keeps your pushup tally in game. /pushups to open.
 ## Author: Obringerad
-## Version: 2.1.0
+## Version: 2.1.1
 ## IconTexture: Interface\Icons\Spell_Nature_Strength
 ## SavedVariables: ForeverPushupsDB
 
