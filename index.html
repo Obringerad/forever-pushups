@@ -722,10 +722,16 @@ function importAddonText(text) {
     }
     const T = ADDON_TYPES[ev.type];
     const btn = p.events.find(b => T.match(b.name));
+    // Older addon versions could log one death twice (PLAYER_DEAD fires twice on Forever).
+    const ts = (ev.t || Date.now() / 1000) * 1000;
+    if (ev.type !== 'flight' && p.log.some(x => x.char === charKey && x.src && x.addonType === ev.type && Math.abs(x.ts - ts) < 5000)) {
+      state.imported[ev.id] = 1;
+      continue;
+    }
     const where = ev.subzone && ev.subzone !== ev.zone ? `${ev.subzone}, ${ev.zone}` : ev.zone;
     const note = ev.type === 'flight' ? (ev.dest || '') : [ev.killer, where].filter(Boolean).join(' – ');
-    p.log.push({ id: uid(), src: ev.id, char: charKey, eventName: btn?.name || T.name, reps: btn?.reps || T.reps,
-      note, ts: (ev.t || Date.now() / 1000) * 1000, done: false, doneTs: null, exercise: null });
+    p.log.push({ id: uid(), src: ev.id, char: charKey, addonType: ev.type, eventName: btn?.name || T.name, reps: btn?.reps || T.reps,
+      note, ts, done: false, doneTs: null, exercise: null });
     state.imported[ev.id] = 1;
     added++;
   }

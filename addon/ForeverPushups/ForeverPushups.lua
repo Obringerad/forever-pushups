@@ -104,8 +104,13 @@ local function inPvPInstance()
   return kind == "pvp" or kind == "arena"
 end
 
+local DEATH_DEBOUNCE = 30 -- WoW Forever fires PLAYER_DEAD twice per death; count it once
+local lastDeathAt
+
 local function onDeath()
   local now = GetTime()
+  if lastDeathAt and now - lastDeathAt < DEATH_DEBOUNCE then return end
+  lastDeathAt = now
   scanAttackers()
   watchFalling()
   local falling = (fallStart and now - fallStart >= FALL_MIN) or (lastLongFall and now - lastLongFall <= FALL_RECENT)
