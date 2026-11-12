@@ -61,7 +61,7 @@
   .row-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
   .row-head h2 { margin: 0; }
   .empty { color: var(--muted); font-style: italic; padding: 12px 4px; }
-  .bars { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto; }
+  .bars { list-style: none; margin: 0; padding: 0 12px 0 0; max-height: 360px; overflow-y: auto; scrollbar-gutter: stable; }
   .bars li { display: grid; grid-template-columns: minmax(110px, 40%) 1fr 36px; align-items: center; gap: 10px; padding: 5px 2px; font-size: 14px; }
   .bars .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bars .lbl small { color: var(--muted); }
@@ -116,7 +116,7 @@
   </section>
 
   <section class="panel">
-    <div class="row-head"><h2>Owed (queue)</h2><span id="doAllBtns"></span></div>
+    <div class="row-head"><h2>Owed queue (<span id="queueCount">0</span>)</h2><span id="doAllBtns"></span></div>
     <ul class="list" id="queue"></ul>
   </section>
 
@@ -441,6 +441,7 @@ function render() {
     </li>`;
   $('queue').innerHTML = queue.slice().reverse().map(e => item(e, true)).join('') || '<li class="empty">Nothing owed. Go die to something.</li>';
   $('history').innerHTML = done.slice().sort((a, b) => b.doneTs - a.doneTs).map(e => item(e, false)).join('') || '<li class="empty">No reps completed yet.</li>';
+  $('queueCount').textContent = queue.length;
   $('doAllBtns').innerHTML = queue.length ? EXERCISES.map(x => `<button class="btn primary" data-all="${x.name}">All as ${x.name.toLowerCase()}</button>`).join(' ') : '';
 
   const ranked = state.profiles.map(pr => {
